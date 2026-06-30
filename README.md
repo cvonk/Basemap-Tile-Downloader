@@ -14,6 +14,8 @@ Plugins ▸ Plugin Manager ▸ Manage and Install Plugins ▸ Installed > WMS AO
 
 ## Usage
 
+Ensure the Coordinate Reference System corresponds with your WMS source. 
+
 Bottom-right > EPSG:xx
 - Set to make the project CRS match your WMS source (e.g. EPSG:32632 for East Italy)
 

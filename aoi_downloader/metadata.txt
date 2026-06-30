@@ -1,0 +1,16 @@
+[general]
+name=AOI Downloader
+qgisMinimumVersion=3.16
+description=Download a WMS or XYZ basemap clipped to an Area-of-Interest polygon and mosaic it into a GeoTIFF.
+about=Auto-detects whether the chosen layer is a WMS or an XYZ tile source. Tiles the request over a polygon AOI (WMS GetMap at a chosen resolution/CRS, or Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS. Requires the GDAL Python bindings.
+version=1.0.0
+author=Coert Vonk
+email=coert.vonk@gmail.com
+tracker=
+repository=
+homepage=
+icon=icon.svg
+experimental=False
+deprecated=False
+category=Web
+tags=wms,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator

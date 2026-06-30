@@ -14,24 +14,24 @@ Plugins ▸ Plugin Manager ▸ Manage and Install Plugins ▸ Installed > WMS AO
 
 ## Usage
 
-Ensure the Coordinate Reference System corresponds with your WMS source. 
+Ensure the project and layer Coordinate Reference Systems corresponds with your WMS source. 
 
-Bottom-right > EPSG:xx
-- Set to make the project CRS match your WMS source (e.g. EPSG:32632 for East Italy)
+To change the project CRS:
+- Bottom-right > EPSG:xx
+  - Set to make the project CRS match your WMS source (e.g. EPSG:32632 for East Italy)
 
 ### Specify how to get the base map 
 
-Consult your source for the WMS URL.
+Consult your map provider for the WMS URL.
 
 In QGIS
 - Layer ▸ Data Source Manager ▸ WMS/WMTS ▸ right-click New Connection
   - Name = e.g. Copertura regioni WMS
   - URL = e.g. http://wms.pcn.minambiente.it/ogc?map=/ms_ogc/WMS_v1.3/raster/ortofoto_colore_12.map
-    - Double-click each
+    - Double-click
       - Italy Geoportale Nazionale Ortho (1m) > Orthofoto a colori anno 2012 > Copertura .. WGS84 - UTM32
-      - Italy Geoportale Nazionale Ortho (1m) > Orthofoto a colori anno 2012 > Copertura .. WGS84 - UTM33
 
-### Set an export boundary (e.g. 10x10 km e.g.)
+### Set an export boundary (e.g. ~10x10 km e.g.)
 
 Layer ▸ Create Layer ▸ New Temporary Scratch Layer
   - Name = Area of Interest (EPSG:32632)
@@ -51,18 +51,26 @@ Layers Panel on the left-size > Area of Interest (EPSG:32632)
     - Right-click anywhere on the canvas to finish drawing
     T- oggle the Edit mode to disable (and save the changes to the layer)
     
-## Exporting to HiRes GeoTIFF
+## Exporting to GeoTIFF
 
 Web ▸ WMS AOI Downloader…
-  - e.g.
+  - Specify settings.  E.g.
     - WMS layer = Copertura regioni WMS
     - AOI polygon layer = Area of Interest (EPSG:32632)
     - Tile size = 1024
     - Resolution = 0.5
     - Output path = C:\User\you\output.tiff
 
+## Q&A
 
+**Q: Why is my map sharp?**
+A: Verify that all the Resulution and Coordinate Reference Systems match your source.
 
+**Q: Why are some tiles missing?**
+A: Most likely this is due to the rate not adapting to servier side throtling.
 
+**Q: What version of QGIS is this for?**
+A: I wrote this for QGIS 3.40.8.
 
-Usage:
+**Q: Can I run this from the QGIS Python window?**
+A: Absolutely, but it will reuse the previous settings. 

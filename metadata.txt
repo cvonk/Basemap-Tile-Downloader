@@ -1,0 +1,16 @@
+[general]
+name=WMS AOI Downloader
+qgisMinimumVersion=3.16
+description=Download a WMS coverage clipped to an Area-of-Interest polygon and mosaic it into a GeoTIFF.
+about=Tiles a WMS GetMap request over the bounding box of a polygon AOI, downloads with adaptive throttling and a resumable SQLite work queue, then builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Pick the WMS layer, the AOI polygon, the tile size and target resolution from a dialog.
+version=1.0.0
+author=Coert Vonk
+email=coert.vonk@gmail.com
+tracker=
+repository=
+homepage=
+icon=icon.svg
+experimental=False
+deprecated=False
+category=Web
+tags=wms,download,raster,mosaic,gdal,orthophoto,aoi

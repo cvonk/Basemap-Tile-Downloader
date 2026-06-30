@@ -1,4 +1,4 @@
-# WMS AOI Downloader
+# WMS AOI Downloader for QGIS
 
 - Requests tiles using WMS GetMap within the bounding box of a polygon area of interest (AOI)
 - Downloads with adaptive throttling

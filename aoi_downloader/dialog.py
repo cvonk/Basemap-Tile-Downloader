@@ -104,10 +104,13 @@ class AoiDialog(QDialog):
         self.layer_combo.layerChanged.connect(self._on_layer_changed)
         form.addRow("Source layer (WMS/WMTS/XYZ):", self.layer_combo)
 
-        # Extent selector like the "Convert Map to Raster" dialog: calculate
-        # from a layer, use the current canvas extent, or draw on the canvas.
-        self.extent_widget = QgsExtentWidget()
+        # Extent selector like the "Convert Map to Raster" dialog. The condensed
+        # style is the single line + dropdown (Calculate from Layer / Use Current
+        # Map Canvas Extent / Draw on Canvas); the default expanded style does
+        # not surface "Draw on Canvas".
+        self.extent_widget = QgsExtentWidget(None, QgsExtentWidget.CondensedStyle)
         if self._canvas is not None:
+            # Enables "Use Current Map Canvas Extent" and "Draw on Canvas".
             self.extent_widget.setMapCanvas(self._canvas)
         self.extent_widget.setOutputCrs(QgsProject.instance().crs())
         self.extent_widget.extentChanged.connect(self._update_estimate)

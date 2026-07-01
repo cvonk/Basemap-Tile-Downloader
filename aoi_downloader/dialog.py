@@ -322,7 +322,10 @@ class AoiDialog(QDialog):
             reply = QMessageBox.question(
                 self, "Large download",
                 f"This will download roughly {n:,} tiles, which may be slow and "
-                f"put load on the server.\n\nContinue?",
+                f"put load on the server.\n\n"
+                f"Bulk-downloading tiles may violate the provider's Terms of "
+                f"Service (e.g. Google, Bing, Esri). Make sure your intended use "
+                f"is permitted before continuing.\n\nContinue?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply != QMessageBox.Yes:
                 return          # keep the dialog open

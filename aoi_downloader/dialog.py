@@ -101,6 +101,7 @@ class AoiDialog(QDialog):
         self.aoi_combo = QgsMapLayerComboBox()
         self.aoi_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
         self.aoi_combo.layerChanged.connect(self._update_estimate)
+        self.aoi_combo.layerChanged.connect(self._update_zoom_label)
         form.addRow("AOI polygon layer:", self.aoi_combo)
 
         # WMS-only rows ------------------------------------------------------
@@ -206,9 +207,24 @@ class AoiDialog(QDialog):
         self._last_source = name
         self._update_estimate()
 
+    def _aoi_center_lat(self):
+        """Latitude (°) of the AOI's bounding-box centre, or None."""
+        aoi = self.aoi_combo.currentLayer()
+        if aoi is None:
+            return None
+        bb = self._aoi_bbox_in(aoi, QgsCoordinateReferenceSystem("EPSG:4326"))
+        return None if bb is None else bb.center().y()
+
     def _update_zoom_label(self, *args):
-        self.zoom_res_info.setText(
-            f"≈ {tilemath.tile_resolution_m(self.zoom_spin.value()):.3f} m/px at the equator")
+        z = self.zoom_spin.value()
+        lat = self._aoi_center_lat()
+        if lat is None:
+            self.zoom_res_info.setText(
+                f"≈ {tilemath.tile_resolution_m(z):.3f} m/px at the equator")
+        else:
+            self.zoom_res_info.setText(
+                f"≈ {tilemath.tile_resolution_m_at_lat(z, lat):.3f} m/px "
+                f"at the AOI (~{lat:.1f}°)")
 
     # ── tile-count estimate ───────────────────────────────────────────────────
     def _aoi_bbox_in(self, aoi, target_crs):

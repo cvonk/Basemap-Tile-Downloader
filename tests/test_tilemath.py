@@ -20,6 +20,22 @@ def test_zoom18_resolution_approx():
     assert abs(tm.tile_resolution_m(18) - 0.5971642835) < 1e-6
 
 
+def test_resolution_at_lat_equator_matches_equatorial():
+    for z in (0, 12, 18):
+        assert tm.tile_resolution_m_at_lat(z, 0.0) == tm.tile_resolution_m(z)
+
+
+def test_resolution_at_lat_60_is_half():
+    # cos(60°) = 0.5
+    assert abs(tm.tile_resolution_m_at_lat(18, 60.0)
+               - tm.tile_resolution_m(18) * 0.5) < 1e-9
+
+
+def test_resolution_at_lat_finer_towards_poles():
+    # Ground resolution number gets smaller (finer) away from the equator.
+    assert tm.tile_resolution_m_at_lat(18, 46.6) < tm.tile_resolution_m(18)
+
+
 def test_tile_bounds_z0_covers_world():
     ulx, uly, lrx, lry = tm.tile_bounds_3857(0, 0, 0)
     assert ulx == -tm.WM_ORIGIN

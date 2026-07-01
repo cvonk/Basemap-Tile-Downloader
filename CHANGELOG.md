@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - The large-download confirmation now also warns about respecting the
   provider's Terms of Service when many tiles are requested.
+- The XYZ zoom label reports the resolution at the AOI's latitude (Web Mercator
+  scale varies with latitude) instead of at the equator.
 
 ## [1.1.0] - 2026-06-30
 ### Added

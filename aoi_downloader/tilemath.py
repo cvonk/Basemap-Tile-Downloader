@@ -22,6 +22,13 @@ def tile_resolution_m(z):
     return tile_span_m(z) / TILE_PIXELS
 
 
+def tile_resolution_m_at_lat(z, lat_deg):
+    """Ground resolution (m/px) at a given latitude. Web Mercator scale grows
+    towards the poles, so the true ground resolution is the equatorial value
+    times cos(latitude)."""
+    return tile_resolution_m(z) * math.cos(math.radians(lat_deg))
+
+
 def tile_bounds_3857(x, y, z):
     """EPSG:3857 bounds of tile (x, y) at zoom z as (ulx, uly, lrx, lry)."""
     span = tile_span_m(z)

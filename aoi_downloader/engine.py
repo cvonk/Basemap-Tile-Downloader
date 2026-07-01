@@ -436,7 +436,8 @@ def build_mosaic(tile_paths, work_dir, logger, tif_path, native_crs, out_crs,
 class AoiDownloadTask(QgsTask):
     def __init__(self, source, layer, aoi_layer, params, opts,
                  native_crs, out_crs, output_path=None, resample="bilinear",
-                 clip=False, concurrency=CONCURRENCY):
+                 clip=False, concurrency=CONCURRENCY,
+                 max_attempts=MAX_ATTEMPTS_PER_TILE):
         super().__init__(TASK_DESC, QgsTask.CanCancel)
         self._source       = source
         self._params       = params
@@ -448,6 +449,7 @@ class AoiDownloadTask(QgsTask):
         self._resample     = resample or "bilinear"
         self._clip         = bool(clip)
         self._concurrency  = max(1, int(concurrency))
+        self._max_attempts = max(1, int(max_attempts))
 
         project = QgsProject.instance()
         base_dir = (os.path.dirname(project.fileName())
@@ -552,7 +554,7 @@ class AoiDownloadTask(QgsTask):
                                 throttle.on_throttle(retry_after)
                             else:
                                 logger.warning("Tile %d attempt %d: %s", tid, attempts, err)
-                            if attempts < MAX_ATTEMPTS_PER_TILE:
+                            if attempts < self._max_attempts:
                                 pending.append([tid, tile, attempts])     # retry later
                             else:
                                 logger.error("Tile %d failed permanently: %s", tid, err)
@@ -667,7 +669,7 @@ class AoiDownloadTask(QgsTask):
 # ─────────────────────────────────────────────
 def run(layer=None, aoi_layer=None, opts=None, out_crs=None,
         output_path=None, temporary=False, resample="bilinear", clip=False,
-        concurrency=None, on_finished=None):
+        concurrency=None, max_attempts=None, on_finished=None):
     """
     Start a download task. The source backend (WMS / XYZ) is auto-detected from
     `layer`. `opts` is the source-specific settings dict
@@ -714,9 +716,10 @@ def run(layer=None, aoi_layer=None, opts=None, out_crs=None,
     print(f"[AOI Downloader] Source : {source.SOURCE_NAME}")
     print(f"[AOI Downloader] Native : {native}   Output CRS: {out_crs}")
 
-    conc = int(concurrency) if concurrency else getattr(source, "CONCURRENCY", CONCURRENCY)
+    conc     = int(concurrency) if concurrency else getattr(source, "CONCURRENCY", CONCURRENCY)
+    attempts = int(max_attempts) if max_attempts else MAX_ATTEMPTS_PER_TILE
     task = AoiDownloadTask(source, layer, aoi_layer, params, opts,
-                           native, out_crs, output_path, resample, clip, conc)
+                           native, out_crs, output_path, resample, clip, conc, attempts)
 
     def _finished(success):
         release_logger()

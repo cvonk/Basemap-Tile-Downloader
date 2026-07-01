@@ -5,9 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 ### Added
-- Configurable "Parallel downloads" (concurrency) in the dialog, remembered
-  per run. WMS now defaults to 2 (stricter servers reject many simultaneous
-  connections); XYZ/WMTS default to 4.
+- Collapsible **Advanced** section in the dialog holding "Parallel downloads"
+  (concurrency) and a new "Maximum attempts per tile". WMS defaults to 2
+  parallel downloads (stricter servers reject many simultaneous connections);
+  XYZ/WMTS default to 4. Both settings are remembered per run.
 ### Fixed
 - Re-running now retries tiles that failed on a previous run (previously
   'failed' tiles were skipped on resume), so gaps from transient server errors

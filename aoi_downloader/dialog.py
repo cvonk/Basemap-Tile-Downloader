@@ -18,7 +18,9 @@ from qgis.core import (
     QgsProject, QgsMapLayerProxyModel, QgsRasterLayer, QgsSettings,
     QgsCoordinateReferenceSystem, QgsCoordinateTransform,
 )
-from qgis.gui import QgsMapLayerComboBox, QgsProjectionSelectionWidget
+from qgis.gui import (
+    QgsMapLayerComboBox, QgsProjectionSelectionWidget, QgsCollapsibleGroupBox,
+)
 
 from . import engine, tilemath
 
@@ -26,8 +28,9 @@ SETTINGS_GROUP = "aoi_downloader"
 
 DEFAULT_TILE_PIXELS = 1024
 DEFAULT_RESOLUTION  = 0.5
-DEFAULT_ZOOM        = 18
-DEFAULT_CONCURRENCY = 4
+DEFAULT_ZOOM         = 18
+DEFAULT_CONCURRENCY  = 4
+DEFAULT_MAX_ATTEMPTS = 6
 
 # Ask for confirmation above this estimated tile count.
 WARN_TILE_COUNT = 5000
@@ -148,15 +151,25 @@ class AoiDialog(QDialog):
         self.clip_check = QCheckBox("Clip output to the AOI polygon")
         form.addRow("", self.clip_check)
 
+        self.out_widget = OutputDestinationWidget()
+        form.addRow("Output:", self.out_widget)
+
+        # Advanced options — created here, placed in a collapsible group below.
         self.conc_spin = QSpinBox()
         self.conc_spin.setRange(1, 16)
         self.conc_spin.setToolTip(
             "Number of tiles fetched in parallel. Lower it (1–2) for strict "
             "servers that reject or throttle many simultaneous connections.")
-        form.addRow("Parallel downloads:", self.conc_spin)
+        self.attempts_spin = QSpinBox()
+        self.attempts_spin.setRange(1, 20)
+        self.attempts_spin.setToolTip(
+            "How many times a tile is retried before it is marked failed.")
 
-        self.out_widget = OutputDestinationWidget()
-        form.addRow("Output:", self.out_widget)
+        advanced = QgsCollapsibleGroupBox("Advanced")
+        advanced.setCollapsed(True)
+        aform = QFormLayout(advanced)
+        aform.addRow("Parallel downloads:", self.conc_spin)
+        aform.addRow("Maximum attempts per tile:", self.attempts_spin)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -164,6 +177,7 @@ class AoiDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addWidget(advanced)
         note = QLabel("WMS is requested at the chosen resolution/CRS; XYZ is "
                       "fetched in EPSG:3857 at the chosen zoom and reprojected to "
                       "the output CRS. Changing the parameters or AOI starts a "
@@ -325,6 +339,7 @@ class AoiDialog(QDialog):
         if out_crs:
             self.crs_widget.setCrs(QgsCoordinateReferenceSystem(out_crs))
         self.conc_spin.setValue(int(s.value(f"{g}/concurrency", DEFAULT_CONCURRENCY)))
+        self.attempts_spin.setValue(int(s.value(f"{g}/max_attempts", DEFAULT_MAX_ATTEMPTS)))
         self._last_source = self._current_source_name()
 
     def _save_state(self):
@@ -339,6 +354,7 @@ class AoiDialog(QDialog):
         s.setValue(f"{g}/resample", self.resample_combo.currentData())
         s.setValue(f"{g}/clip", self.clip_check.isChecked())
         s.setValue(f"{g}/concurrency", self.conc_spin.value())
+        s.setValue(f"{g}/max_attempts", self.attempts_spin.value())
         ly, al = self.layer_combo.currentLayer(), self.aoi_combo.currentLayer()
         s.setValue(f"{g}/layer_id", ly.id() if ly else "")
         s.setValue(f"{g}/aoi_layer_id", al.id() if al else "")
@@ -378,5 +394,6 @@ class AoiDialog(QDialog):
         resample = self.resample_combo.currentData()
         clip = self.clip_check.isChecked()
         concurrency = self.conc_spin.value()
+        max_attempts = self.attempts_spin.value()
         return (layer, aoi, opts, out_crs, out_path, temporary, resample, clip,
-                concurrency)
+                concurrency, max_attempts)

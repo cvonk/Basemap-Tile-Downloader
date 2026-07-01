@@ -2,20 +2,20 @@
 
 [![CI](https://github.com/cvonk/AOI-Downloader-for-QGIS/actions/workflows/ci.yml/badge.svg)](https://github.com/cvonk/AOI-Downloader-for-QGIS/actions/workflows/ci.yml)
 
-A QGIS plugin that exports a high-resolution GeoTIFF from a **WMS** or **XYZ**
-basemap, clipped to a polygon area of interest (AOI).
+A QGIS plugin that exports a high-resolution GeoTIFF from a **WMS**, **WMTS**, or
+**XYZ** basemap, clipped to a polygon area of interest (AOI).
 
 It:
-- Auto-detects whether the chosen layer is a WMS or an XYZ tile source.
+- Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source.
 - Tiles the request over the AOI — WMS `GetMap` at a chosen resolution/CRS, or
-  Web-Mercator `{z}/{x}/{y}` at a chosen zoom level.
+  WMTS / Web-Mercator `{z}/{x}/{y}` tiles at a chosen zoom level.
 - Throttles requests adaptively (tuned per source type) and fetches tiles in
-  parallel, staying fast without overloading the server.
+  parallel, with a configurable number of parallel downloads.
 - Tracks progress in a resumable SQLite queue, so an interrupted run continues
-  where it left off.
+  where it left off, and a re-run retries any tiles that failed previously.
 - Georeferences each tile and mosaics them into a compressed, tiled GeoTIFF
-  (with overviews), optionally reprojected to a chosen output CRS with a
-  selectable resampling method, then loads it into the project.
+  (with overviews), optionally reprojected to a chosen output CRS (selectable
+  resampling) and clipped to the AOI polygon, then loads it into the project.
 
 Requires the GDAL Python bindings (bundled with QGIS). Written for QGIS 3.40.8.
 
@@ -40,10 +40,10 @@ The tool then appears under **Web ▸ AOI Downloader…** and on the toolbar.
 ### 1. Match the coordinate reference system
 
 Set the project CRS to suit your source by clicking the EPSG code in the
-bottom-right of the window. WMS is requested in that CRS; XYZ is always fetched
-in EPSG:3857 and reprojected to the output CRS you pick in the dialog — or left
-in EPSG:3857 if you choose **None** for the resampling.
-(For example, **EPSG:32632** for an Italian UTM-32 source.)
+bottom-right of the window. WMS is requested in that CRS; XYZ/WMTS tiles are
+fetched in their native CRS (EPSG:3857 for XYZ) and reprojected to the output
+CRS you pick in the dialog — or left in the native CRS if you choose **None**
+for the resampling. (For example, **EPSG:32632** for an Italian UTM-32 source.)
 
 ### 2. Add the basemap
 
@@ -54,6 +54,9 @@ in EPSG:3857 if you choose **None** for the resampling.
 
   Connect and add the layer (e.g. *Ortofoto a colori anno 2012 ▸ Copertura …
   WGS84 - UTM32*).
+
+**WMTS** — **Layer ▸ Data Source Manager ▸ WMS/WMTS ▸ New**, connect to the
+service's `GetCapabilities` URL and add a WMTS layer / tile matrix set.
 
 **XYZ** — **Layer ▸ Data Source Manager ▸ XYZ ▸ New**, give it a name and a
 `{z}/{x}/{y}` URL template.
@@ -93,6 +96,8 @@ fields for its type — and the AOI polygon, then set the output.
 | Resolution | `0.5` |
 | Output CRS | `EPSG:32632` |
 | Reproject sampling | `Bilinear` (or Nearest / Cubic / None) |
+| Clip to AOI polygon | ☐ (tick to mask to the polygon shape) |
+| Parallel downloads | `2` (lower for strict servers) |
 | Output | `C:\Users\you\output.tif` (or a temporary file) |
 
 **XYZ example**
@@ -104,12 +109,22 @@ fields for its type — and the AOI polygon, then set the output.
 | Zoom level | `18` (≈ 0.6 m/px) |
 | Output CRS | `EPSG:32632` |
 | Reproject sampling | `Bilinear` (or Nearest / Cubic / None) |
+| Clip to AOI polygon | ☐ (tick to mask to the polygon shape) |
+| Parallel downloads | `4` |
 | Output | `C:\Users\you\output.tif` (or a temporary file) |
 
-The dialog shows a live tile-count estimate as you adjust the settings; above
-about 5,000 tiles it asks for confirmation before starting, to avoid an
-accidental huge download. Choosing **None** for the resampling keeps the mosaic
-in its native CRS (no reprojection).
+(A **WMTS** layer uses the same fields as XYZ — pick a **zoom level**.)
+
+Notes:
+- The dialog shows a live tile-count estimate as you adjust the settings; above
+  about 5,000 tiles it asks for confirmation (and a Terms-of-Service reminder)
+  before starting, to avoid an accidental huge download.
+- **Reproject sampling: None** keeps the mosaic in its native CRS (no
+  reprojection, no resampling).
+- **Clip to AOI polygon** masks the output to the polygon shape instead of the
+  rectangular tile extent.
+- **Parallel downloads** — lower it (1–2) for strict servers that reject many
+  simultaneous connections; WMS defaults to 2, XYZ/WMTS to 4.
 
 Click **OK** to start. Progress is shown in the Task Manager, and the finished
 mosaic is added to the project automatically.
@@ -122,9 +137,18 @@ source. For XYZ, requesting a zoom finer than the provider serves only
 interpolates — it adds no real detail.
 
 **Why are some tiles missing?**
-For WMS, the request rate may not have adapted quickly enough to server-side
-throttling — re-run the export and the resumable queue fills in the gaps. For
-XYZ, `404`/`204` tiles are treated as legitimate gaps (no data at that tile).
+Tiles can fail from server-side rate-limiting/throttling or a transient server
+error (the completion message and `download.log` report how many failed).
+**Just run the export again with the same settings** — it keeps the tiles
+already downloaded and retries the failed ones, so the gaps fill in once the
+server cooperates. If a specific server keeps failing many parallel requests,
+lower **Parallel downloads** (to 1–2). For XYZ, `404`/`204` tiles are treated as
+legitimate gaps (no data at that tile).
+
+**A run failed with a WMS `ServiceException` about a file it can't open.**
+That's the *provider's* server failing to read its own data (often intermittent)
+— not a plugin or network problem on your side. Wait and re-run; the failed
+tiles will be retried.
 
 **Which version of QGIS is this for?**
 It was written for QGIS 3.40.8.
@@ -139,11 +163,13 @@ from qgis.core import QgsProject
 wms = QgsProject.instance().mapLayersByName("Copertura regioni WMS")[0]
 aoi = QgsProject.instance().mapLayersByName("Area of Interest (EPSG:32632)")[0]
 
-# WMS: opts = {tile_pixels, resolution};  XYZ: opts = {zoom}
+# WMS: opts = {tile_pixels, resolution};  XYZ/WMTS: opts = {zoom}
 engine.run(layer=wms, aoi_layer=aoi,
            opts={"tile_pixels": 1024, "resolution": 0.5},
            out_crs="EPSG:32632",
            resample="bilinear",            # near | bilinear | cubic | none
+           clip=True,                      # mask output to the AOI polygon
+           concurrency=2,                  # parallel tile fetches
            output_path=r"C:\Users\you\output.tif")  # or temporary=True for a temp file
 ```
 

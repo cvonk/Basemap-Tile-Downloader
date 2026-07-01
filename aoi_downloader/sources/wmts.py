@@ -171,31 +171,21 @@ def prepare(params, opts, logger):
 # ─────────────────────────────────────────────
 # TILE GRID
 # ─────────────────────────────────────────────
-def build_tile_grid(aoi_layer, params, opts, logger):
+def build_tile_grid(aoi_geom, aoi_crs, params, opts, logger):
     matrices = params.get("matrices")
     if not matrices:
         raise DownloaderError("WMTS capabilities not prepared.")
     m   = max(0, min(len(matrices) - 1, int(opts.get("zoom", 0))))
     mat = matrices[m]
 
-    tms   = QgsCoordinateReferenceSystem(params["tms_crs"])
-    ctx   = QgsProject.instance().transformContext()
-    xform = None if aoi_layer.crs() == tms else QgsCoordinateTransform(aoi_layer.crs(), tms, ctx)
+    tms    = QgsCoordinateReferenceSystem(params["tms_crs"])
+    ctx    = QgsProject.instance().transformContext()
+    src    = QgsCoordinateReferenceSystem(aoi_crs)
+    region = QgsGeometry(aoi_geom)
+    if src != tms and region.transform(QgsCoordinateTransform(src, tms, ctx)) != 0:
+        raise DownloaderError("Could not reproject the extent to the tile-matrix-set CRS.")
 
-    geoms = []
-    for feat in aoi_layer.getFeatures():
-        g = QgsGeometry(feat.geometry())
-        if g.isNull() or g.isEmpty():
-            continue
-        if xform and g.transform(xform) != 0:
-            logger.warning("Could not reproject feature id=%s; skipping.", feat.id())
-            continue
-        geoms.append(g)
-    if not geoms:
-        raise DownloaderError("AOI layer has no usable polygon geometries.")
-
-    union = QgsGeometry.unaryUnion(geoms)
-    bb    = union.boundingBox()
+    bb    = region.boundingBox()
     topx, topy, tsx, tsy = mat["topx"], mat["topy"], mat["tsx"], mat["tsy"]
 
     def _clampc(v): return max(0, min(mat["mw"] - 1, v))
@@ -213,13 +203,13 @@ def build_tile_grid(aoi_layer, params, opts, logger):
         for c in range(cmin, cmax + 1):
             ulx = topx + c * tsx; uly = topy - r * tsy
             if QgsGeometry.fromRect(
-                    QgsRectangle(ulx, uly - tsy, ulx + tsx, uly)).intersects(union):
+                    QgsRectangle(ulx, uly - tsy, ulx + tsx, uly)).intersects(region):
                 tiles.append({"id": tid, "m": m, "col": c, "row": r})
                 tid += 1
 
-    logger.info("Kept %d tiles intersecting the AOI.", len(tiles))
+    logger.info("Kept %d tiles intersecting the extent.", len(tiles))
     if not tiles:
-        raise DownloaderError("No tiles intersect the AOI polygon.")
+        raise DownloaderError("No tiles intersect the extent.")
     return tiles
 
 

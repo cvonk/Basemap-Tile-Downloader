@@ -20,6 +20,7 @@ from qgis.core import (
 )
 from qgis.gui import (
     QgsMapLayerComboBox, QgsProjectionSelectionWidget, QgsCollapsibleGroupBox,
+    QgsExtentWidget,
 )
 
 from . import engine, tilemath
@@ -85,8 +86,9 @@ class OutputDestinationWidget(QWidget):
 
 
 class AoiDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, canvas=None, parent=None):
         super().__init__(parent)
+        self._canvas = canvas
         self.setWindowTitle("AOI Downloader")
         self.setMinimumWidth(500)
         self._last_source = None
@@ -100,13 +102,19 @@ class AoiDialog(QDialog):
         self.layer_combo.setAllowEmptyLayer(True)
         self._restrict_to_sources()
         self.layer_combo.layerChanged.connect(self._on_layer_changed)
-        form.addRow("Source layer (WMS/XYZ):", self.layer_combo)
+        form.addRow("Source layer (WMS/WMTS/XYZ):", self.layer_combo)
 
-        self.aoi_combo = QgsMapLayerComboBox()
-        self.aoi_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
-        self.aoi_combo.layerChanged.connect(self._update_estimate)
-        self.aoi_combo.layerChanged.connect(self._update_zoom_label)
-        form.addRow("AOI polygon layer:", self.aoi_combo)
+        # Extent selector like the "Convert Map to Raster" dialog: calculate
+        # from a layer, use the current canvas extent, or draw on the canvas.
+        self.extent_widget = QgsExtentWidget()
+        if self._canvas is not None:
+            self.extent_widget.setMapCanvas(self._canvas)
+        self.extent_widget.setOutputCrs(QgsProject.instance().crs())
+        self.extent_widget.extentChanged.connect(self._update_estimate)
+        self.extent_widget.extentChanged.connect(self._update_zoom_label)
+        # Hide this dialog while the user draws an extent on the canvas.
+        self.extent_widget.toggleDialogVisibility.connect(self.setVisible)
+        form.addRow("Extent to render:", self.extent_widget)
 
         # WMS-only rows ------------------------------------------------------
         self.tile_lbl  = QLabel("Tile size (px):")
@@ -148,7 +156,7 @@ class AoiDialog(QDialog):
         self.resample_combo.currentIndexChanged.connect(self._sync_resample)
         form.addRow("Reproject sampling:", self.resample_combo)
 
-        self.clip_check = QCheckBox("Clip output to the AOI polygon")
+        self.clip_check = QCheckBox("Crop output to the exact extent")
         form.addRow("", self.clip_check)
 
         self.out_widget = OutputDestinationWidget()
@@ -178,10 +186,10 @@ class AoiDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(advanced)
-        note = QLabel("WMS is requested at the chosen resolution/CRS; XYZ is "
-                      "fetched in EPSG:3857 at the chosen zoom and reprojected to "
-                      "the output CRS. Changing the parameters or AOI starts a "
-                      "fresh download.")
+        note = QLabel("WMS is requested at the chosen resolution/CRS; XYZ/WMTS "
+                      "tiles are fetched in their native CRS at the chosen zoom "
+                      "and reprojected to the output CRS. Changing the parameters "
+                      "or extent starts a fresh download.")
         note.setWordWrap(True)
         layout.addWidget(note)
         layout.addWidget(buttons)
@@ -231,11 +239,8 @@ class AoiDialog(QDialog):
         self._update_estimate()
 
     def _aoi_center_lat(self):
-        """Latitude (°) of the AOI's bounding-box centre, or None."""
-        aoi = self.aoi_combo.currentLayer()
-        if aoi is None:
-            return None
-        bb = self._aoi_bbox_in(aoi, QgsCoordinateReferenceSystem("EPSG:4326"))
+        """Latitude (°) of the extent's centre, or None."""
+        bb = self._extent_bbox_in(QgsCoordinateReferenceSystem("EPSG:4326"))
         return None if bb is None else bb.center().y()
 
     def _update_zoom_label(self, *args):
@@ -250,14 +255,19 @@ class AoiDialog(QDialog):
                 f"at the AOI (~{lat:.1f}°)")
 
     # ── tile-count estimate ───────────────────────────────────────────────────
-    def _aoi_bbox_in(self, aoi, target_crs):
-        """The AOI layer's extent, reprojected to target_crs. None on failure."""
+    def _extent_bbox_in(self, target_crs):
+        """The chosen extent reprojected to target_crs, or None if not set."""
+        if not self.extent_widget.isValid():
+            return None
         try:
-            ext = aoi.extent()
-            if aoi.crs() == target_crs:
+            ext = self.extent_widget.outputExtent()
+            src = self.extent_widget.outputCrs()
+            if ext.isEmpty():
+                return None
+            if src == target_crs:
                 return ext
             xform = QgsCoordinateTransform(
-                aoi.crs(), target_crs, QgsProject.instance().transformContext())
+                src, target_crs, QgsProject.instance().transformContext())
             return xform.transformBoundingBox(ext)
         except Exception:
             return None
@@ -266,13 +276,12 @@ class AoiDialog(QDialog):
         """Upper-bound tile count over the AOI bounding box (no polygon
         intersection), or None if it can't be computed yet."""
         layer = self.layer_combo.currentLayer()
-        aoi   = self.aoi_combo.currentLayer()
         name  = self._current_source_name()
-        if layer is None or aoi is None or name is None:
+        if layer is None or name is None:
             return None
         try:
             if name == "XYZ":
-                bb = self._aoi_bbox_in(aoi, QgsCoordinateReferenceSystem("EPSG:3857"))
+                bb = self._extent_bbox_in(QgsCoordinateReferenceSystem("EPSG:3857"))
                 if bb is None:
                     return None
                 xmin, xmax, ymin, ymax = tilemath.tile_range(
@@ -281,7 +290,7 @@ class AoiDialog(QDialog):
                 return (xmax - xmin + 1) * (ymax - ymin + 1)
             if name == "WMS":
                 params = engine.source_for(layer).extract_params(layer)   # no network
-                bb = self._aoi_bbox_in(aoi, QgsCoordinateReferenceSystem(params["crs"]))
+                bb = self._extent_bbox_in(QgsCoordinateReferenceSystem(params["crs"]))
                 if bb is None:
                     return None
                 step = self.tile_spin.value() * self.res_spin.value()
@@ -326,12 +335,6 @@ class AoiDialog(QDialog):
         lid = s.value(f"{g}/layer_id", "")
         if lid and proj.mapLayer(lid):
             self.layer_combo.setLayer(proj.mapLayer(lid))
-        aid = s.value(f"{g}/aoi_layer_id", "")
-        if aid and proj.mapLayer(aid):
-            self.aoi_combo.setLayer(proj.mapLayer(aid))
-        else:
-            for lyr in proj.mapLayersByName("Area of Interest (EPSG:32632)"):
-                self.aoi_combo.setLayer(lyr); break
 
         # …then restore the remembered output CRS so it wins over the default,
         # and pin _last_source so the final refresh won't clobber it again.
@@ -355,9 +358,8 @@ class AoiDialog(QDialog):
         s.setValue(f"{g}/clip", self.clip_check.isChecked())
         s.setValue(f"{g}/concurrency", self.conc_spin.value())
         s.setValue(f"{g}/max_attempts", self.attempts_spin.value())
-        ly, al = self.layer_combo.currentLayer(), self.aoi_combo.currentLayer()
+        ly = self.layer_combo.currentLayer()
         s.setValue(f"{g}/layer_id", ly.id() if ly else "")
-        s.setValue(f"{g}/aoi_layer_id", al.id() if al else "")
 
     def accept(self):
         n = self._estimate_tiles()
@@ -378,7 +380,6 @@ class AoiDialog(QDialog):
     # ── result ────────────────────────────────────────────────────────────────
     def values(self):
         layer = self.layer_combo.currentLayer()
-        aoi   = self.aoi_combo.currentLayer()
         name  = self._current_source_name()
         if name == "WMS":
             opts = {"tile_pixels": self.tile_spin.value(),
@@ -395,5 +396,8 @@ class AoiDialog(QDialog):
         clip = self.clip_check.isChecked()
         concurrency = self.conc_spin.value()
         max_attempts = self.attempts_spin.value()
-        return (layer, aoi, opts, out_crs, out_path, temporary, resample, clip,
-                concurrency, max_attempts)
+        valid = self.extent_widget.isValid()
+        extent = self.extent_widget.outputExtent() if valid else None
+        extent_crs = self.extent_widget.outputCrs().authid() if valid else None
+        return (layer, extent, extent_crs, opts, out_crs, out_path, temporary,
+                resample, clip, concurrency, max_attempts)

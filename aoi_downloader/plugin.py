@@ -44,23 +44,23 @@ class AoiDownloaderPlugin:
         self.action = None
 
     def show_dialog(self):
-        dlg = AoiDialog(self.iface.mainWindow())
+        dlg = AoiDialog(self.iface.mapCanvas(), self.iface.mainWindow())
         if not dlg.exec():
             return
 
-        (layer, aoi_layer, opts, out_crs, output_path, temporary, resample, clip,
-         concurrency, max_attempts) = dlg.values()
-        if layer is None or aoi_layer is None:
+        (layer, extent, extent_crs, opts, out_crs, output_path, temporary,
+         resample, clip, concurrency, max_attempts) = dlg.values()
+        if layer is None or engine.source_for(layer) is None:
             self.iface.messageBar().pushWarning(
-                MENU_TITLE, "Select both a WMS/XYZ source layer and an AOI polygon layer.")
+                MENU_TITLE, "Select a recognised WMS / WMTS / XYZ source layer.")
             return
-        if engine.source_for(layer) is None:
+        if extent is None or extent.isEmpty():
             self.iface.messageBar().pushWarning(
-                MENU_TITLE, "The selected layer is not a recognised WMS or XYZ tile layer.")
+                MENU_TITLE, "Set an extent to render.")
             return
 
         try:
-            engine.run(layer=layer, aoi_layer=aoi_layer, opts=opts,
+            engine.run(layer=layer, extent=extent, extent_crs=extent_crs, opts=opts,
                        out_crs=out_crs, output_path=output_path, temporary=temporary,
                        resample=resample, clip=clip, concurrency=concurrency,
                        max_attempts=max_attempts, on_finished=self._on_run_finished)

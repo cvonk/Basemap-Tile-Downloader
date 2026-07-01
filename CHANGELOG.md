@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
+### Changed
+- **The download area is now a rectangular extent instead of an AOI polygon
+  layer.** The dialog uses an extent selector (Calculate from Layer / Use
+  Current Map Canvas Extent / Draw on Canvas), like QGIS's "Convert Map to
+  Raster" dialog. The old "Clip to AOI polygon" option is now "Crop output to
+  the exact extent". Downloading/clipping to an irregular polygon shape is no
+  longer available.
 ### Added
 - Collapsible **Advanced** section in the dialog holding "Parallel downloads"
   (concurrency) and a new "Maximum attempts per tile". WMS defaults to 2

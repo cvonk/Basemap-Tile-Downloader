@@ -15,7 +15,7 @@ A "source" module exposes:
     prepare(params, opts, logger) -> None        # optional (WMS caps/format)
     native_crs(params, opts) -> str
     default_out_crs(params) -> str
-    build_tile_grid(aoi_layer, params, opts, logger) -> list[dict]   # each has "id"
+    build_tile_grid(aoi_geom, aoi_crs, params, opts, logger) -> list[dict]  # each has "id"
     fetch_one_tile(params, opts, tile, out_path, logger) -> path|None
     fingerprint_parts(params, opts) -> list
 """
@@ -369,15 +369,13 @@ class TileQueue:
 # ─────────────────────────────────────────────
 # FINGERPRINT
 # ─────────────────────────────────────────────
-def fingerprint(source, params, opts, aoi_layer):
+def fingerprint(source, params, opts, aoi_wkt, aoi_crs):
     h = hashlib.sha256()
     h.update(source.SOURCE_NAME.encode())
     for part in source.fingerprint_parts(params, opts):
         h.update(str(part).encode())
-    for feat in aoi_layer.getFeatures():
-        g = feat.geometry()
-        if not g.isNull():
-            h.update(g.asWkt(precision=2).encode())
+    h.update((aoi_crs or "").encode())
+    h.update((aoi_wkt or "").encode())
     return h.hexdigest()[:16]
 
 
@@ -434,7 +432,7 @@ def build_mosaic(tile_paths, work_dir, logger, tif_path, native_crs, out_crs,
 # QGSTASK
 # ─────────────────────────────────────────────
 class AoiDownloadTask(QgsTask):
-    def __init__(self, source, layer, aoi_layer, params, opts,
+    def __init__(self, source, layer, aoi_wkt, aoi_crs, params, opts,
                  native_crs, out_crs, output_path=None, resample="bilinear",
                  clip=False, concurrency=CONCURRENCY,
                  max_attempts=MAX_ATTEMPTS_PER_TILE):
@@ -442,7 +440,8 @@ class AoiDownloadTask(QgsTask):
         self._source       = source
         self._params       = params
         self._opts         = opts
-        self._aoi_layer_id = aoi_layer.id()
+        self._aoi_wkt      = aoi_wkt      # extent as a rectangle polygon (WKT)
+        self._aoi_crs      = aoi_crs      # CRS authid of the extent
         self._native_crs   = native_crs
         self._out_crs      = out_crs or native_crs
         self._output_path  = output_path or None
@@ -479,9 +478,9 @@ class AoiDownloadTask(QgsTask):
         if gdal is None:
             raise DownloaderError("GDAL bindings unavailable; cannot run.")
 
-        aoi_layer = QgsProject.instance().mapLayer(self._aoi_layer_id)
-        if aoi_layer is None:
-            raise DownloaderError("AOI layer was removed from the project.")
+        aoi_geom = QgsGeometry.fromWkt(self._aoi_wkt or "")
+        if aoi_geom.isNull() or aoi_geom.isEmpty():
+            raise DownloaderError("No valid extent to download.")
 
         prepare = getattr(self._source, "prepare", None)
         if callable(prepare):
@@ -490,8 +489,10 @@ class AoiDownloadTask(QgsTask):
             # reads it from the capabilities), so refresh it now.
             self._native_crs = self._source.native_crs(self._params, self._opts)
 
-        tiles = self._source.build_tile_grid(aoi_layer, self._params, self._opts, logger)
-        fp = fingerprint(self._source, self._params, self._opts, aoi_layer)
+        tiles = self._source.build_tile_grid(
+            aoi_geom, self._aoi_crs, self._params, self._opts, logger)
+        fp = fingerprint(self._source, self._params, self._opts,
+                         self._aoi_wkt, self._aoi_crs)
         logger.info("Job fingerprint: %s", fp)
 
         db_path = os.path.join(self.work_dir, "tiles.sqlite")
@@ -580,7 +581,7 @@ class AoiDownloadTask(QgsTask):
             if not tile_paths:
                 raise DownloaderError("No tiles downloaded; cannot build mosaic.")
 
-            cutline = self._build_cutline(aoi_layer, logger) if self._clip else None
+            cutline = self._build_cutline(aoi_geom, logger) if self._clip else None
             vrt_path, tif_path = build_mosaic(
                 tile_paths, self.work_dir, logger, self._output_path,
                 self._native_crs, self._out_crs, self._resample, cutline)
@@ -598,26 +599,18 @@ class AoiDownloadTask(QgsTask):
             queue.close()
             release_logger()
 
-    def _build_cutline(self, aoi_layer, logger):
-        """Write the AOI polygon (reprojected to the output CRS) to a GeoPackage
-        for use as a gdal.Warp cutline. Returns the path, or None on failure."""
+    def _build_cutline(self, aoi_geom, logger):
+        """Write the extent polygon (reprojected to the output CRS) to a
+        GeoPackage for use as a gdal.Warp cutline. Returns the path, or None."""
         try:
             from osgeo import ogr, osr
             target = QgsCoordinateReferenceSystem(self._out_crs)
-            ctx = QgsProject.instance().transformContext()
-            xform = (None if aoi_layer.crs() == target
-                     else QgsCoordinateTransform(aoi_layer.crs(), target, ctx))
-            geoms = []
-            for feat in aoi_layer.getFeatures():
-                g = QgsGeometry(feat.geometry())
-                if g.isNull() or g.isEmpty():
-                    continue
-                if xform and g.transform(xform) != 0:
-                    continue
-                geoms.append(g)
-            if not geoms:
+            src    = QgsCoordinateReferenceSystem(self._aoi_crs)
+            ctx    = QgsProject.instance().transformContext()
+            g = QgsGeometry(aoi_geom)
+            if src != target and g.transform(QgsCoordinateTransform(src, target, ctx)) != 0:
                 return None
-            wkt = QgsGeometry.unaryUnion(geoms).asWkt()
+            wkt = g.asWkt()
 
             path = os.path.join(self.work_dir, "cutline.gpkg")
             if os.path.exists(path):
@@ -667,7 +660,7 @@ class AoiDownloadTask(QgsTask):
 # ─────────────────────────────────────────────
 # ENTRY POINT
 # ─────────────────────────────────────────────
-def run(layer=None, aoi_layer=None, opts=None, out_crs=None,
+def run(layer=None, extent=None, extent_crs=None, opts=None, out_crs=None,
         output_path=None, temporary=False, resample="bilinear", clip=False,
         concurrency=None, max_attempts=None, on_finished=None):
     """
@@ -689,10 +682,18 @@ def run(layer=None, aoi_layer=None, opts=None, out_crs=None,
 
     source = source_for(layer)
     if source is None:
-        msg = "Selected layer is not a recognised WMS or XYZ tile layer."
+        msg = "Selected layer is not a recognised WMS/WMTS/XYZ tile layer."
         QgsMessageLog.logMessage(msg, LOG_TAB, Qgis.Critical)
         print(f"[AOI Downloader] ERROR: {msg}")
         return None
+
+    if extent is None or extent.isEmpty():
+        msg = "No extent to download."
+        QgsMessageLog.logMessage(msg, LOG_TAB, Qgis.Critical)
+        print(f"[AOI Downloader] ERROR: {msg}")
+        return None
+    aoi_crs = extent_crs or QgsProject.instance().crs().authid()
+    aoi_wkt = QgsGeometry.fromRect(extent).asWkt()
 
     try:
         params = source.extract_params(layer)
@@ -718,7 +719,7 @@ def run(layer=None, aoi_layer=None, opts=None, out_crs=None,
 
     conc     = int(concurrency) if concurrency else getattr(source, "CONCURRENCY", CONCURRENCY)
     attempts = int(max_attempts) if max_attempts else MAX_ATTEMPTS_PER_TILE
-    task = AoiDownloadTask(source, layer, aoi_layer, params, opts,
+    task = AoiDownloadTask(source, layer, aoi_wkt, aoi_crs, params, opts,
                            native, out_crs, output_path, resample, clip, conc, attempts)
 
     def _finished(success):

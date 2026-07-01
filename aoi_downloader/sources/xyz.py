@@ -60,31 +60,20 @@ def fingerprint_parts(params, opts):
 # ─────────────────────────────────────────────
 # TILE GRID
 # ─────────────────────────────────────────────
-def build_tile_grid(aoi_layer, params, opts, logger):
+def build_tile_grid(aoi_geom, aoi_crs, params, opts, logger):
     zoom = int(opts.get("zoom", 18))
     web  = QgsCoordinateReferenceSystem(WEBMERC)
     ctx  = QgsProject.instance().transformContext()
-    aoi_crs = aoi_layer.crs()
-    xform = None if aoi_crs == web else QgsCoordinateTransform(aoi_crs, web, ctx)
+    src  = QgsCoordinateReferenceSystem(aoi_crs)
+    region = QgsGeometry(aoi_geom)
+    if src != web and region.transform(QgsCoordinateTransform(src, web, ctx)) != 0:
+        raise DownloaderError("Could not reproject the extent to EPSG:3857.")
 
-    geoms = []
-    for feat in aoi_layer.getFeatures():
-        g = QgsGeometry(feat.geometry())
-        if g.isNull() or g.isEmpty():
-            continue
-        if xform and g.transform(xform) != 0:
-            logger.warning("Could not reproject feature id=%s; skipping.", feat.id())
-            continue
-        geoms.append(g)
-    if not geoms:
-        raise DownloaderError("AOI layer has no usable polygon geometries.")
-
-    union = QgsGeometry.unaryUnion(geoms)
-    bb    = union.boundingBox()
+    bb = region.boundingBox()
     xmin, xmax, ymin, ymax = tile_range(
         bb.xMinimum(), bb.yMinimum(), bb.xMaximum(), bb.yMaximum(), zoom)
 
-    logger.info("AOI bbox (EPSG:3857): %s", bb.toString())
+    logger.info("Extent bbox (EPSG:3857): %s", bb.toString())
     logger.info("Zoom %d → %.3f m/px; tiles x[%d..%d] y[%d..%d]",
                 zoom, tile_resolution_m(zoom), xmin, xmax, ymin, ymax)
 
@@ -92,13 +81,13 @@ def build_tile_grid(aoi_layer, params, opts, logger):
     for ty in range(ymin, ymax + 1):
         for tx in range(xmin, xmax + 1):
             ulx, uly, lrx, lry = tile_bounds_3857(tx, ty, zoom)
-            if QgsGeometry.fromRect(QgsRectangle(ulx, lry, lrx, uly)).intersects(union):
+            if QgsGeometry.fromRect(QgsRectangle(ulx, lry, lrx, uly)).intersects(region):
                 tiles.append({"id": tid, "z": zoom, "x": tx, "y": ty})
                 tid += 1
 
-    logger.info("Kept %d tiles intersecting the AOI.", len(tiles))
+    logger.info("Kept %d tiles intersecting the extent.", len(tiles))
     if not tiles:
-        raise DownloaderError("No tiles intersect the AOI polygon.")
+        raise DownloaderError("No tiles intersect the extent.")
     return tiles
 
 

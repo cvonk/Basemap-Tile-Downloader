@@ -148,7 +148,7 @@ def prepare(params, opts, logger):
 # ─────────────────────────────────────────────
 # TILE GRID
 # ─────────────────────────────────────────────
-def build_tile_grid(aoi_layer, params, opts, logger):
+def build_tile_grid(aoi_geom, aoi_crs, params, opts, logger):
     tile_pixels = int(opts.get("tile_pixels", 1024))
     resolution  = float(opts.get("resolution", 0.5))
 
@@ -157,29 +157,19 @@ def build_tile_grid(aoi_layer, params, opts, logger):
         raise DownloaderError(f"Request CRS '{params['crs']}' is invalid.")
 
     ctx     = QgsProject.instance().transformContext()
-    aoi_crs = aoi_layer.crs()
-    xform   = None if aoi_crs == req_crs else QgsCoordinateTransform(aoi_crs, req_crs, ctx)
+    src_crs = QgsCoordinateReferenceSystem(aoi_crs)
+    region  = QgsGeometry(aoi_geom)
+    if src_crs != req_crs and region.transform(
+            QgsCoordinateTransform(src_crs, req_crs, ctx)) != 0:
+        raise DownloaderError("Could not reproject the extent to the request CRS.")
 
-    geoms = []
-    for feat in aoi_layer.getFeatures():
-        g = QgsGeometry(feat.geometry())
-        if g.isNull() or g.isEmpty():
-            continue
-        if xform and g.transform(xform) != 0:
-            logger.warning("Could not reproject feature id=%s; skipping.", feat.id())
-            continue
-        geoms.append(g)
-    if not geoms:
-        raise DownloaderError("AOI layer has no usable polygon geometries.")
-
-    union = QgsGeometry.unaryUnion(geoms)
-    bb    = union.boundingBox()
+    bb    = region.boundingBox()
     step  = tile_pixels * resolution
     if step <= 0:
         raise DownloaderError("Tile size in map units is ≤ 0 – check resolution.")
 
     n_cols, n_rows = wms_grid_dims(bb.width(), bb.height(), step)
-    logger.info("AOI bbox (req CRS): %s", bb.toString())
+    logger.info("Extent bbox (req CRS): %s", bb.toString())
     logger.info("Grid: %d×%d tiles, %.2f map-units/tile", n_cols, n_rows, step)
 
     tiles, tid = [], 0
@@ -188,14 +178,14 @@ def build_tile_grid(aoi_layer, params, opts, logger):
             xmin = bb.xMinimum() + col * step
             ymin = bb.yMinimum() + row * step
             xmax, ymax = xmin + step, ymin + step
-            if QgsGeometry.fromRect(QgsRectangle(xmin, ymin, xmax, ymax)).intersects(union):
+            if QgsGeometry.fromRect(QgsRectangle(xmin, ymin, xmax, ymax)).intersects(region):
                 tiles.append({"id": tid, "xmin": xmin, "ymin": ymin,
                               "xmax": xmax, "ymax": ymax})
                 tid += 1
 
-    logger.info("Kept %d/%d tiles intersecting the AOI.", len(tiles), n_cols * n_rows)
+    logger.info("Kept %d/%d tiles intersecting the extent.", len(tiles), n_cols * n_rows)
     if not tiles:
-        raise DownloaderError("No tiles intersect the AOI polygon.")
+        raise DownloaderError("No tiles intersect the extent.")
     return tiles
 
 

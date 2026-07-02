@@ -3,19 +3,26 @@
 [![CI](https://github.com/cvonk/Basemap-Tile-Downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/cvonk/Basemap-Tile-Downloader/actions/workflows/ci.yml)
 
 A QGIS plugin that exports a high-resolution GeoTIFF from a **WMS**, **WMTS**, or
-**XYZ** basemap over a chosen rectangular extent.
+**XYZ** basemap — or from a **local raster** (e.g. a GeoTIFF already loaded in
+the project) — over a chosen rectangular extent.
 
 It:
-- Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source.
+- Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source, or a
+  local (GDAL) raster such as a GeoTIFF.
 - Tiles the request over the extent — WMS `GetMap` at a chosen resolution/CRS,
-  or WMTS / Web-Mercator `{z}/{x}/{y}` tiles at a chosen zoom level.
+  WMTS / Web-Mercator `{z}/{x}/{y}` tiles at a chosen zoom level, or a windowed
+  read of a local raster at a chosen resolution.
 - Throttles requests adaptively (tuned per source type) and fetches tiles in
-  parallel, with a configurable number of parallel downloads.
+  parallel, with a configurable number of parallel downloads. A server-directed
+  `Retry-After` is honoured; a local raster has nothing to download, so it is
+  read at full speed.
 - Tracks progress in a resumable SQLite queue, so an interrupted run continues
   where it left off, and a re-run retries any tiles that failed previously.
 - Georeferences each tile and mosaics them into a compressed, tiled GeoTIFF
   (with overviews), optionally reprojected to a chosen output CRS (selectable
   resampling) and cropped to the exact extent, then loads it into the project.
+  Single-band rasters (e.g. a DTM) keep their nodata value instead of gaining an
+  alpha band.
 
 Requires the GDAL Python bindings (bundled with QGIS). Written for QGIS 3.40.8.
 
@@ -61,6 +68,11 @@ service's `GetCapabilities` URL and add a WMTS layer / tile matrix set.
 **XYZ** — **Layer ▸ Data Source Manager ▸ XYZ ▸ New**, give it a name and a
 `{z}/{x}/{y}` URL template.
 
+**Local raster (GeoTIFF)** — just load the file in QGIS
+(**Layer ▸ Add Layer ▸ Add Raster Layer…**). Any GDAL-readable raster works;
+there is nothing to download, so the tool exports it over the chosen extent
+(reprojecting/cropping as configured).
+
 ### 3. Export to GeoTIFF
 
 Open **Web ▸ Basemap Tile Downloader…**. Pick the source layer (the dialog shows
@@ -103,6 +115,22 @@ dialog — set it from the dropdown:
 
 (A **WMTS** layer uses the same fields as XYZ — pick a **zoom level**.)
 
+**Local raster (GeoTIFF) example**
+
+| Setting | Example |
+| --- | --- |
+| Source layer | `DTM Italy (10m)` |
+| Extent to render | Current map canvas extent |
+| Tile size | `1024` |
+| Resolution | `10` (defaults to the raster's native pixel size) |
+| Output CRS | `EPSG:32632` |
+| Reproject sampling | `Bilinear` (or Nearest / Cubic / None) |
+| Crop output to the exact extent | ☑ |
+| Output | `C:\Users\you\clip.tif` (or a temporary file) |
+
+(A local raster uses the same fields as WMS — tile size + resolution. The
+resolution defaults to the raster's native pixel size when you pick the layer.)
+
 Notes:
 - The dialog shows a live tile-count estimate as you adjust the settings; above
   about 5,000 tiles it asks for confirmation (and a Terms-of-Service reminder)
@@ -139,6 +167,15 @@ That's the *provider's* server failing to read its own data (often intermittent)
 — not a plugin or network problem on your side. Wait and re-run; the failed
 tiles will be retried.
 
+**Can I export a local GeoTIFF instead of downloading?**
+Yes. Load any GDAL-readable raster in QGIS and pick it as the source layer. There
+is nothing to download — the raster is read over the chosen extent and run
+through the same reproject / crop / mosaic pipeline. Use it to clip, reproject,
+or resample a raster to a new GeoTIFF. (A clip may look brighter than the source
+in QGIS: that's QGIS recomputing its contrast stretch over the smaller value
+range, not a change in the data — match the layers' Min/Max in Symbology to
+compare.)
+
 **Which version of QGIS is this for?**
 It was written for QGIS 3.40.8.
 
@@ -155,7 +192,7 @@ wms = QgsProject.instance().mapLayersByName("Copertura regioni WMS")[0]
 extent = iface.mapCanvas().extent()               # any QgsRectangle
 extent_crs = QgsProject.instance().crs().authid()
 
-# WMS: opts = {tile_pixels, resolution};  XYZ/WMTS: opts = {zoom}
+# WMS / local raster: opts = {tile_pixels, resolution};  XYZ/WMTS: opts = {zoom}
 engine.run(layer=wms, extent=extent, extent_crs=extent_crs,
            opts={"tile_pixels": 1024, "resolution": 0.5},
            out_crs="EPSG:32632",

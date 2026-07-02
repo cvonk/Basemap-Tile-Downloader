@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-07-01
+### Changed
+- The `download.log` is now truncated at the start of each run instead of being
+  appended to, so it no longer grows without bound (the resumable state lives in
+  the SQLite queue, not the log).
+- Server rate-limiting is now logged explicitly: each throttle/timeout logs the
+  reason (incl. any HTTP status and the server's `Retry-After`), the new pacing
+  delay, and the back-pressure retry count.
+
 ## [1.3.1] - 2026-07-01
 ### Added
 - The dialog now remembers the last-used extent (North/South/East/West and its

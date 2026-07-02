@@ -3,7 +3,7 @@ name=Basemap Tile Downloader
 qgisMinimumVersion=3.40.8
 description=Download a WMS, WMTS, or XYZ basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings.
-version=1.3.1
+version=1.3.2
 author=Coert Vonk
 email=coert.vonk@gmail.com
 tracker=https://github.com/cvonk/Basemap-Tile-Downloader/issues
@@ -14,7 +14,10 @@ experimental=False
 deprecated=False
 category=Web
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.3.1 - Dialog remembers and restores the last-used extent. Extent
+changelog=1.3.2 - download.log is truncated at the start of each run (no longer
+    grows unbounded). Server rate-limiting is now logged explicitly (reason,
+    HTTP status, Retry-After, new pacing, and back-pressure retry count).
+    1.3.1 - Dialog remembers and restores the last-used extent. Extent
     widget shown as separate, clearly-labelled fields (readable with a comma
     decimal separator) in a collapsible group. Throttle/timeout responses retried
     on a separate budget and a server Retry-After is honoured, so rate-limiting no

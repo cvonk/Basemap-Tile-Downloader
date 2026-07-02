@@ -111,7 +111,9 @@ def build_logger(work_dir):
     logger.handlers = []
 
     log_path = os.path.join(work_dir, "download.log")
-    fh = logging.FileHandler(log_path, encoding="utf-8")
+    # mode="w": start each run with a fresh log so it doesn't grow unbounded
+    # across re-runs (the resumable queue lives in the SQLite DB, not the log).
+    fh = logging.FileHandler(log_path, mode="w", encoding="utf-8")
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
@@ -249,6 +251,12 @@ class AdaptiveThrottle:
     def __init__(self, logger, initial_delay=INITIAL_DELAY_SEC):
         self._d, self._ok, self._log = initial_delay, 0, logger
         self._extra = 0.0     # one-shot wait honouring a server-directed Retry-After
+
+    def status(self):
+        """Human-readable current pacing, for the log."""
+        if self._extra:
+            return f"{self._d:.2f}s + {self._extra:.1f}s one-shot"
+        return f"{self._d:.2f}s"
 
     def wait(self, cancel_check=None):
         rem = self._d + self._extra     # consume any one-shot Retry-After wait
@@ -612,11 +620,18 @@ class BasemapTileDownloadTask(QgsTask):
                             else:
                                 throttle.on_throttle(retry_after)
                             backpressure += 1
+                            ra = f", server asked {retry_after:.0f}s" if retry_after else ""
                             if backpressure <= self._max_backpressure:
                                 pending.append([tid, tile, attempts, backpressure])
+                                logger.info(
+                                    "Tile %d back-pressure (%s: %s%s) — backing off, "
+                                    "now pacing at %s; requeued (retry %d/%d).",
+                                    tid, outcome, err or "-", ra, throttle.status(),
+                                    backpressure, self._max_backpressure)
                             else:
-                                logger.error("Tile %d gave up after %d throttle/timeout "
-                                             "retries: %s", tid, backpressure, err)
+                                logger.error(
+                                    "Tile %d gave up after %d throttle/timeout "
+                                    "retries: %s", tid, backpressure, err)
                                 queue.mark_failed(tid, err)
                                 failed_count += 1
                         else:

@@ -2,8 +2,9 @@
 """
 Basemap Tile Downloader – plugin glue.
 
-Adds a menu entry (+ toolbar button), shows the source-aware dialog, then hands
-off to engine.run() which auto-detects the WMS/XYZ backend.
+Adds a Raster-menu entry (+ toolbar button), shows the source-aware dialog, then
+hands off to engine.run() which auto-detects the source backend (WMS / WMTS /
+XYZ / local raster).
 """
 import os
 
@@ -14,8 +15,6 @@ from qgis.core import Qgis, QgsMessageLog
 from .dialog import BasemapTileDialog
 from . import engine
 
-# "web" -> Web menu (convention for web-service tools); "plugins" -> Plugins menu
-MENU = "web"
 MENU_TITLE = "Basemap Tile Downloader"
 
 
@@ -30,17 +29,12 @@ class BasemapTileDownloaderPlugin:
             QIcon(self._icon_path), "Basemap Tile Downloader…", self.iface.mainWindow())
         self.action.triggered.connect(self.show_dialog)
         self.iface.addToolBarIcon(self.action)
-        if MENU == "web":
-            self.iface.addPluginToWebMenu(MENU_TITLE, self.action)
-        else:
-            self.iface.addPluginToMenu(MENU_TITLE, self.action)
+        # Raster menu: it exports a raster, so it lives with the raster tools.
+        self.iface.addPluginToRasterMenu(MENU_TITLE, self.action)
 
     def unload(self):
         self.iface.removeToolBarIcon(self.action)
-        if MENU == "web":
-            self.iface.removePluginWebMenu(MENU_TITLE, self.action)
-        else:
-            self.iface.removePluginMenu(MENU_TITLE, self.action)
+        self.iface.removePluginRasterMenu(MENU_TITLE, self.action)
         self.action = None
 
     def show_dialog(self):

@@ -2,8 +2,8 @@
 name=Basemap Tile Downloader
 qgisMinimumVersion=3.40.8
 description=Download a WMS, WMTS, or XYZ basemap over an extent and mosaic it into a GeoTIFF.
-about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings.
-version=1.4.3
+about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
+version=1.4.4
 author=Coert Vonk
 email=coert.vonk@gmail.com
 tracker=https://github.com/cvonk/Basemap-Tile-Downloader/issues
@@ -12,9 +12,13 @@ homepage=https://github.com/cvonk/Basemap-Tile-Downloader
 icon=icon.svg
 experimental=False
 deprecated=False
-category=Web
+category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.4.3 - New "Minimum delay between requests" advanced option (default
+changelog=1.4.4 - Moved the menu entry from Web to Raster (category is now
+    Raster). Added a note that the plugin is for personal/educational use only and
+    to respect provider Terms of Service, plus a Q&A on NaN extents from
+    "Calculate from Layer" (a layer CRS mismatch — reproject that layer).
+    1.4.3 - New "Minimum delay between requests" advanced option (default
     0). The mosaic is now always built from whatever downloaded, including after a
     cancel, so gaps show which tiles are missing. Persistently-broken tiles give
     up faster (back-pressure budget 8, backoff cap 30s).

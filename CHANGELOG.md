@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-07-03
+### Added
+- Note in the README and plugin description that this plugin is for personal and
+  educational use only, and to respect each provider's Terms of Service.
+- README Q&A entry explaining that a `NaN` extent from "Calculate from Layer"
+  usually means the layer's CRS doesn't match — reproject that layer.
+### Changed
+- The menu entry moved from **Web** to **Raster** (`Raster ▸ Basemap Tile
+  Downloader…`), and the plugin category is now Raster — it exports a raster, so
+  it belongs with the raster tools.
+
 ## [1.4.3] - 2026-07-02
 ### Added
 - **Minimum delay between requests** (Advanced, default 0 s): a floor on the

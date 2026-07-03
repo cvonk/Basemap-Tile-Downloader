@@ -26,6 +26,11 @@ It:
 
 Requires the GDAL Python bindings (bundled with QGIS). Written for QGIS 3.40.8.
 
+> **Note:** This plugin is intended for personal and educational use only.
+> Bulk-downloading tiles may violate a provider's Terms of Service (e.g. Google,
+> Bing, Esri). Make sure your intended use is permitted, and respect each
+> provider's usage limits, before downloading.
+
 ## Installation
 
 The installable plugin lives in the **`basemap_tile_downloader/`** sub-folder of
@@ -36,7 +41,7 @@ this repository (the repo root holds the README, licence and screenshots).
 2. In QGIS, open **Plugins ▸ Manage and Install Plugins ▸ Installed**.
 3. Check the box next to **Basemap Tile Downloader** to activate it.
 
-The tool then appears under **Web ▸ Basemap Tile Downloader…** and on the toolbar.
+The tool then appears under **Raster ▸ Basemap Tile Downloader…** and on the toolbar.
 
 > If you are developing, `sync.ps1` in the parent folder mirrors every plugin
 > package here into the QGIS plugins folder; pair it with the *Plugin Reloader*
@@ -75,7 +80,7 @@ there is nothing to download, so the tool exports it over the chosen extent
 
 ### 3. Export to GeoTIFF
 
-Open **Web ▸ Basemap Tile Downloader…**. Pick the source layer (the dialog shows
+Open **Raster ▸ Basemap Tile Downloader…**. Pick the source layer (the dialog shows
 the fields for its type), choose the **extent to render**, then set the output.
 
 ![Basemap Tile Downloader dialog](media/dialog.png)
@@ -152,6 +157,14 @@ Click **OK** to start. Progress is shown in the Task Manager, and the finished
 mosaic is added to the project automatically.
 
 ## Q & A
+
+**"Calculate from Layer" fills the extent with `NaN`.**
+This usually means the CRS of the layer you picked for the extent doesn't line
+up with the extent's CRS, so reprojecting its bounding box produces invalid
+(`NaN`) coordinates. Reproject the layer you're using for the extent so its CRS
+matches (right-click the layer ▸ **Export ▸ Save Features As…** and choose the
+target CRS) — or, if its assigned CRS is simply wrong, fix it under the layer's
+**Properties ▸ Source ▸ Assigned CRS**. Then pick the layer again.
 
 **Why is my map blurry?**
 Check that the resolution / zoom and the coordinate reference systems suit your

@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-07-03
+### Changed
+- Starting a download now raises QGIS's **Log Messages** panel (the *Basemap Tile
+  Downloader* tab), so the live run log is visible without hunting for it, and the
+  "download started" message points there.
+
 ## [1.4.4] - 2026-07-03
 ### Added
 - Note in the README and plugin description that this plugin is for personal and

@@ -8,7 +8,7 @@ XYZ / local raster).
 """
 import os
 
-from qgis.PyQt.QtWidgets import QAction
+from qgis.PyQt.QtWidgets import QAction, QDockWidget
 from qgis.PyQt.QtGui import QIcon
 from qgis.core import Qgis, QgsMessageLog
 
@@ -59,11 +59,29 @@ class BasemapTileDownloaderPlugin:
                        resample=resample, clip=clip, concurrency=concurrency,
                        max_attempts=max_attempts, min_delay=min_delay,
                        on_finished=self._on_run_finished)
+            self._raise_log_panel()
             self.iface.messageBar().pushInfo(
-                MENU_TITLE, "Download started — watch the Task Manager panel.")
+                MENU_TITLE,
+                "Download started — progress in the Task Manager; live log in the "
+                "Log Messages panel (Basemap Tile Downloader tab).")
         except Exception as e:
             QgsMessageLog.logMessage(str(e), "Basemap Tile Downloader", Qgis.Critical)
             self.iface.messageBar().pushCritical(MENU_TITLE, str(e))
+
+    def _raise_log_panel(self):
+        """Show/raise QGIS's Log Messages panel so the live run log is visible.
+        The dock's objectName ('MessageLog') is stable across UI languages."""
+        try:
+            dock = self.iface.mainWindow().findChild(QDockWidget, "MessageLog")
+            if dock is None:
+                return
+            if hasattr(dock, "setUserVisible"):     # QgsDockWidget: show + raise tab
+                dock.setUserVisible(True)
+            else:
+                dock.setVisible(True)
+                dock.raise_()
+        except Exception:
+            pass
 
     def _on_run_finished(self, result):
         """Post a completion summary to the message bar (runs on the main thread)."""

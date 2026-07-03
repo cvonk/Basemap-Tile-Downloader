@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
+### Changed
+- Renamed the GitHub repository to `qgis-basemap-tile-downloader`; updated the
+  tracker/repository/homepage URLs and the README CI badge. (GitHub redirects the
+  old URL, and the plugin package folder `basemap_tile_downloader/` is unchanged.)
 
 ## [1.4.5] - 2026-07-03
 ### Changed

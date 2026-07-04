@@ -43,7 +43,8 @@ class BasemapTileDownloaderPlugin:
             return
 
         (layer, extent, extent_crs, opts, out_crs, output_path, temporary,
-         resample, clip, concurrency, max_attempts, min_delay) = dlg.values()
+         resample, clip, concurrency, max_attempts, min_delay,
+         backoff_cap, giveup_after) = dlg.values()
         if layer is None or engine.source_for(layer) is None:
             self.iface.messageBar().pushWarning(
                 MENU_TITLE, "Select a recognised WMS / WMTS / XYZ or local raster (GeoTIFF) layer.")
@@ -58,6 +59,7 @@ class BasemapTileDownloaderPlugin:
                        out_crs=out_crs, output_path=output_path, temporary=temporary,
                        resample=resample, clip=clip, concurrency=concurrency,
                        max_attempts=max_attempts, min_delay=min_delay,
+                       backoff_cap=backoff_cap, giveup_after=giveup_after,
                        on_finished=self._on_run_finished)
             self._raise_log_panel()
             self.iface.messageBar().pushInfo(
@@ -90,6 +92,7 @@ class BasemapTileDownloaderPlugin:
         total, done = s.get("total", 0), s.get("done", 0)
         missing = max(0, total - done)      # failed + not-yet-fetched (cancelled)
         cancelled = result.get("cancelled")
+        server_gave_up = result.get("server_gave_up")
 
         if result.get("loaded"):
             if cancelled:
@@ -97,6 +100,12 @@ class BasemapTileDownloaderPlugin:
                     MENU_TITLE,
                     f"Cancelled — partial mosaic loaded ({done} of {total} tiles, "
                     f"{missing} missing). Re-run to fill the gaps.")
+            elif server_gave_up:
+                bar.pushWarning(
+                    MENU_TITLE,
+                    f"Server unavailable — stopped early; partial mosaic loaded "
+                    f"({done} of {total} tiles, {missing} missing). Re-run later to "
+                    f"fill the gaps.")
             elif missing:
                 bar.pushWarning(
                     MENU_TITLE,

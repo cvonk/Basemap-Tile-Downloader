@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
+
+## [1.4.6] - 2026-07-03
+### Fixed
+- A resumed run no longer grinds for hours when a provider refuses a block of
+  tiles (every request returning a ServiceException / 429 with the throttle
+  pinned at its back-off cap). A run-level **circuit breaker** now stops after
+  N requests in a row with no success (~10 min at the cap by default), builds a
+  partial mosaic from what downloaded, and leaves the rest `pending` so a later
+  re-run fills the gaps. Previously the progress bar would sit at (e.g.) 93% for
+  hours while the same failing tiles were requeued.
+### Added
+- Two **Advanced** options to tune patience vs. speed per provider:
+  *Back-off cap* (the adaptive throttle's ceiling, default 30 s) and *Give up
+  after (server errors in a row)* (the circuit-breaker threshold, default 30;
+  set to 0 / "Never" to disable it and keep only the per-tile limit).
 ### Changed
 - Renamed the GitHub repository to `qgis-basemap-tile-downloader`; updated the
   tracker/repository/homepage URLs and the README CI badge. (GitHub redirects the

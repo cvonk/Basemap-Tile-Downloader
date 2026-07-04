@@ -3,7 +3,7 @@ name=Basemap Tile Downloader
 qgisMinimumVersion=3.40.8
 description=Download a WMS, WMTS, or XYZ basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.4.5
+version=1.4.6
 author=Coert Vonk
 email=coert.vonk@gmail.com
 tracker=https://github.com/cvonk/qgis-basemap-tile-downloader/issues
@@ -14,7 +14,12 @@ experimental=False
 deprecated=False
 category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.4.5 - Starting a download now raises QGIS's Log Messages panel (the
+changelog=1.4.6 - A resumed run no longer grinds for hours when a provider
+    refuses a block of tiles (every request failing with the throttle pinned at
+    its cap). A run-level circuit breaker stops after ~10 min of no successes,
+    builds a partial mosaic, and leaves the rest pending for a later re-run. New
+    Advanced options: back-off cap, and give-up threshold (0 = never).
+    1.4.5 - Starting a download now raises QGIS's Log Messages panel (the
     Basemap Tile Downloader tab) so the live run log is visible without hunting.
     1.4.4 - Moved the menu entry from Web to Raster (category is now
     Raster). Added a note that the plugin is for personal/educational use only and

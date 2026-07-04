@@ -20,7 +20,7 @@ A "source" module exposes:
     fingerprint_parts(params, opts) -> list
 """
 
-import os, json, sqlite3, logging, time, traceback, hashlib, uuid
+import os, json, sqlite3, logging, time, traceback, hashlib, uuid, configparser
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime
@@ -49,6 +49,14 @@ MAX_ATTEMPTS_PER_TILE    = 6
 # Still bounded, so a server that returns 429/403 forever can't loop indefinitely.
 MAX_BACKPRESSURE_RETRIES = 8       # bounded so a persistently-broken tile gives up
                                    # in minutes, not hours
+# Run-level circuit breaker: the per-tile budget above bounds each tile, but a
+# whole run can still grind for hours when a server refuses a large block of
+# tiles (every request 429s / ServiceExceptions, throttle pinned at the cap, the
+# same tiles requeued round-robin). If this many requests fail in a row with NO
+# successful tile in between, treat the server as down for this run, stop, and
+# build a partial mosaic from whatever downloaded (the rest stay 'pending', so a
+# re-run resumes them). At the 30s back-off cap this trips after ~10 minutes.
+MAX_CONSECUTIVE_BACKPRESSURE = 30
 INITIAL_DELAY_SEC        = 0.5
 MIN_DELAY_SEC            = 0.05
 MAX_DELAY_SEC            = 30.0    # ceiling for our *adaptive* (guessed) backoff
@@ -67,6 +75,18 @@ CLEANUP_TILES_AFTER_MOSAIC = False
 WORK_SUBDIR_NAME = "btd_cache"
 LOG_TAB          = "Basemap Tile Downloader"
 TASK_DESC        = "Basemap tile download"
+
+
+def _plugin_version():
+    """Version string from this plugin's metadata.txt (matches the released git
+    tag). Empty string if it can't be read."""
+    try:
+        cp = configparser.ConfigParser(interpolation=None)   # tolerate % in values
+        cp.read(os.path.join(os.path.dirname(__file__), "metadata.txt"),
+                encoding="utf-8")
+        return cp.get("general", "version", fallback="").strip()
+    except Exception:
+        return ""
 
 
 def _first_line(s, limit=200):
@@ -260,10 +280,12 @@ def georeference(body, out_tif, bounds, srs, detect_empty=False):
 # ADAPTIVE THROTTLE
 # ─────────────────────────────────────────────
 class AdaptiveThrottle:
-    def __init__(self, logger, initial_delay=INITIAL_DELAY_SEC, min_delay=0.0):
+    def __init__(self, logger, initial_delay=INITIAL_DELAY_SEC, min_delay=0.0,
+                 max_delay=MAX_DELAY_SEC):
         self._d, self._ok, self._log = max(initial_delay, min_delay), 0, logger
         self._extra = 0.0     # one-shot wait honouring a server-directed Retry-After
         self._min = max(0.0, float(min_delay))   # user floor on the pace (default 0)
+        self._max = max(self._min, float(max_delay))   # ceiling for adaptive back-off
 
     def status(self):
         """Human-readable current pacing, for the log."""
@@ -295,8 +317,8 @@ class AdaptiveThrottle:
         self._d = new
 
     def on_throttle(self, retry_after=None, reason="rate-limit"):
-        # Adaptive (guessed) backoff is capped at MAX_DELAY_SEC.
-        new = min(MAX_DELAY_SEC, self._d * SLOWDOWN_FACTOR)
+        # Adaptive (guessed) backoff is capped at the (configurable) ceiling.
+        new = min(self._max, self._d * SLOWDOWN_FACTOR)
         if retry_after and retry_after > 0:
             # The server told us exactly how long to wait: honour it as a bounded
             # one-shot pause. We only nudge the adaptive baseline up modestly, so
@@ -311,7 +333,7 @@ class AdaptiveThrottle:
             self._slow(new, reason)
 
     def on_timeout(self):
-        self._slow(min(MAX_DELAY_SEC, self._d * SLOWDOWN_FACTOR), "timeout")
+        self._slow(min(self._max, self._d * SLOWDOWN_FACTOR), "timeout")
 
 
 # ─────────────────────────────────────────────
@@ -516,7 +538,8 @@ class BasemapTileDownloadTask(QgsTask):
     def __init__(self, source, layer, extent_wkt, extent_crs, params, opts,
                  native_crs, out_crs, output_path=None, resample="bilinear",
                  clip=False, concurrency=CONCURRENCY,
-                 max_attempts=MAX_ATTEMPTS_PER_TILE, min_delay=0.0):
+                 max_attempts=MAX_ATTEMPTS_PER_TILE, min_delay=0.0,
+                 backoff_cap=MAX_DELAY_SEC, giveup_after=MAX_CONSECUTIVE_BACKPRESSURE):
         # Silent: suppress QGIS's own task-finished/terminated notifications — the
         # plugin posts its own completion (and error) messages, so QGIS's generic
         # one is just noise, especially after a failure. (Silent needs QGIS 3.26+;
@@ -540,6 +563,10 @@ class BasemapTileDownloadTask(QgsTask):
         self._max_attempts = max(1, int(max_attempts))
         self._max_backpressure = MAX_BACKPRESSURE_RETRIES
         self._min_delay    = max(0.0, float(min_delay or 0.0))
+        # Advanced (per-run) tuning: adaptive back-off ceiling, and the run-level
+        # circuit-breaker threshold (0 = never give up, only the per-tile limit).
+        self._backoff_cap  = max(self._min_delay, float(backoff_cap or MAX_DELAY_SEC))
+        self._giveup_after = max(0, int(giveup_after))
 
         project = QgsProject.instance()
         base_dir = (os.path.dirname(project.fileName())
@@ -551,6 +578,7 @@ class BasemapTileDownloadTask(QgsTask):
         self.exception       = None
         self.summary         = None      # {total, done, failed} once tiles resolve
         self.was_cancelled   = False     # set if the run was cancelled mid-way
+        self.server_gave_up  = False     # set if the circuit breaker tripped (server down)
         self.logger          = build_logger(self.work_dir)
 
     def run(self):
@@ -566,7 +594,9 @@ class BasemapTileDownloadTask(QgsTask):
 
     def _run_impl(self):
         logger = self.logger
-        logger.info("=== Basemap tile download (%s) starting ===", self._source.SOURCE_NAME)
+        ver = _plugin_version()
+        logger.info("=== Basemap tile download%s (%s) starting ===",
+                    f" v{ver}" if ver else "", self._source.SOURCE_NAME)
         if gdal is None:
             raise DownloaderError("GDAL bindings unavailable; cannot run.")
 
@@ -599,7 +629,8 @@ class BasemapTileDownloadTask(QgsTask):
             logger.info("Queue: %s  (total=%d)", queue.counts(), total)
 
             initial_delay = getattr(self._source, "INITIAL_DELAY_SEC", INITIAL_DELAY_SEC)
-            throttle = AdaptiveThrottle(logger, initial_delay, self._min_delay)
+            throttle = AdaptiveThrottle(logger, initial_delay, self._min_delay,
+                                        max_delay=self._backoff_cap)
             if self._min_delay:
                 logger.info("Minimum delay between requests: %.2fs", self._min_delay)
             self._sleep(initial_delay)
@@ -624,10 +655,17 @@ class BasemapTileDownloadTask(QgsTask):
             # first time, then just a one-line "(repeat ×N)" — a broken provider
             # can otherwise spam thousands of identical multi-line exceptions.
             err_seen = {}
-            logger.info("Fetching with concurrency=%d", self._concurrency)
+            # Circuit breaker: back-pressure failures in a row with no success.
+            # Reset by any successful tile; trips at MAX_CONSECUTIVE_BACKPRESSURE.
+            consecutive_bp = 0
+            logger.info("Fetching with concurrency=%d (back-off cap %.0fs, give up "
+                        "after %s consecutive failures)", self._concurrency,
+                        self._backoff_cap,
+                        self._giveup_after if self._giveup_after else "never")
 
             with ThreadPoolExecutor(max_workers=self._concurrency) as pool:
-                while (pending or in_flight) and not self.isCanceled():
+                while (pending or in_flight) and not self.isCanceled() \
+                        and not self.server_gave_up:
                     # Fill the pool, pacing each dispatch with the throttle so
                     # the overall request rate stays adaptive.
                     while pending and len(in_flight) < self._concurrency:
@@ -651,6 +689,7 @@ class BasemapTileDownloadTask(QgsTask):
                             throttle.on_success()
                             queue.mark_done(tid, path)
                             done_count += 1
+                            consecutive_bp = 0     # a success resets the circuit breaker
                             logger.info("Tile %d OK%s", tid,
                                         "" if outcome == "ok" else " (empty/missing)")
                         elif outcome in ("throttle", "timeout", "server_error"):
@@ -668,6 +707,7 @@ class BasemapTileDownloadTask(QgsTask):
                             else:                       # server_error
                                 throttle.on_throttle(reason="server error")
                             backpressure += 1
+                            consecutive_bp += 1     # feeds the run-level circuit breaker
                             ra = f", server asked {retry_after:.0f}s" if retry_after else ""
                             seen = err_seen.get(err, 0) + 1
                             err_seen[err] = seen
@@ -712,6 +752,19 @@ class BasemapTileDownloadTask(QgsTask):
                         processed += 1
                         done_n = done_count + failed_count
                         self.setProgress(100.0 * done_n / total if total else 100.0)
+
+                        # Circuit breaker: server has refused every request for a
+                        # long stretch — stop grinding and build what we have.
+                        # A threshold of 0 disables it (only the per-tile limit).
+                        if self._giveup_after and consecutive_bp >= self._giveup_after:
+                            self.server_gave_up = True
+                            logger.error(
+                                "Server persistently failing: %d requests in a row "
+                                "with no success (pacing at %s). Giving up on the "
+                                "remaining tiles and building a partial mosaic from "
+                                "the %d downloaded so far; re-run later to fill the "
+                                "gaps.", consecutive_bp, throttle.status(), done_count)
+                            break
                         if processed % 25 == 0:
                             logger.info("Checkpoint %d/%d (done=%d, failed=%d)",
                                         done_n, total, done_count, failed_count)
@@ -724,13 +777,21 @@ class BasemapTileDownloadTask(QgsTask):
             final_counts = queue.counts()
             n_done   = final_counts.get("done", 0)
             n_failed = final_counts.get("failed", 0)
+            n_pending = final_counts.get("pending", 0)
             self.summary = {"total": total, "done": n_done, "failed": n_failed,
-                            "cancelled": cancelled}
+                            "cancelled": cancelled,
+                            "server_gave_up": self.server_gave_up}
             if cancelled:
                 logger.warning(
                     "Cancelled at %d/%d tiles — building a partial mosaic from what "
                     "downloaded so far (queue checkpointed in %s; re-run to continue).",
                     n_done, total, db_path)
+            elif self.server_gave_up:
+                logger.warning(
+                    "Stopped early (server unavailable): %d of %d tiles downloaded, "
+                    "%d still pending. Building a partial mosaic; re-run later to "
+                    "fetch the rest (queue checkpointed in %s).",
+                    n_done, total, n_pending, db_path)
             elif n_failed:
                 logger.warning(
                     "Queue drained: %d of %d tiles downloaded, %d failed after "
@@ -841,7 +902,8 @@ class BasemapTileDownloadTask(QgsTask):
 # ─────────────────────────────────────────────
 def run(layer=None, extent=None, extent_crs=None, opts=None, out_crs=None,
         output_path=None, temporary=False, resample="bilinear", clip=False,
-        concurrency=None, max_attempts=None, min_delay=None, on_finished=None):
+        concurrency=None, max_attempts=None, min_delay=None,
+        backoff_cap=None, giveup_after=None, on_finished=None):
     """
     Start a download task. The source backend (WMS / XYZ) is auto-detected from
     `layer`. `opts` is the source-specific settings dict
@@ -899,9 +961,12 @@ def run(layer=None, extent=None, extent_crs=None, opts=None, out_crs=None,
     conc     = int(concurrency) if concurrency else getattr(source, "CONCURRENCY", CONCURRENCY)
     attempts = int(max_attempts) if max_attempts else MAX_ATTEMPTS_PER_TILE
     mind     = float(min_delay) if min_delay else 0.0
+    cap      = float(backoff_cap) if backoff_cap else MAX_DELAY_SEC
+    # giveup_after=0 means "never give up", so distinguish it from None (not set).
+    giveup   = MAX_CONSECUTIVE_BACKPRESSURE if giveup_after is None else int(giveup_after)
     task = BasemapTileDownloadTask(source, layer, extent_wkt, extent_crs, params, opts,
                                    native, out_crs, output_path, resample, clip,
-                                   conc, attempts, mind)
+                                   conc, attempts, mind, cap, giveup)
 
     def _finished(success):
         release_logger()
@@ -931,6 +996,7 @@ def run(layer=None, extent=None, extent_crs=None, opts=None, out_crs=None,
                     "success":   bool(success),
                     "loaded":    loaded,
                     "cancelled": bool(task.was_cancelled),
+                    "server_gave_up": bool(task.server_gave_up),
                     "tif":       tif,
                     "summary":   task.summary or {},
                     "error":     (str(task.exception)

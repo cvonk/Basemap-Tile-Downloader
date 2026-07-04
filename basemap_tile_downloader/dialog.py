@@ -37,6 +37,9 @@ DEFAULT_ZOOM         = 18
 DEFAULT_CONCURRENCY  = 4
 DEFAULT_MAX_ATTEMPTS = 6
 DEFAULT_MIN_DELAY    = 0.0
+# Sourced from the engine so the dialog's defaults can't drift from the real ones.
+DEFAULT_BACKOFF_CAP  = engine.MAX_DELAY_SEC                # s; adaptive back-off ceiling
+DEFAULT_GIVEUP_AFTER = engine.MAX_CONSECUTIVE_BACKPRESSURE # consecutive fails → give up
 
 # Ask for confirmation above this estimated tile count.
 WARN_TILE_COUNT = 5000
@@ -230,6 +233,23 @@ class BasemapTileDialog(QDialog):
             "Floor on the pace: never send requests closer together than this. "
             "0 = no floor (the adaptive throttle decides). Raise it (e.g. 2 s) to "
             "pin a known-good rate for a strict server.")
+        self.backoff_cap_spin = QDoubleSpinBox()
+        self.backoff_cap_spin.setRange(1.0, 300.0)
+        self.backoff_cap_spin.setDecimals(0)
+        self.backoff_cap_spin.setSingleStep(5.0)
+        self.backoff_cap_spin.setSuffix(" s")
+        self.backoff_cap_spin.setToolTip(
+            "Longest the adaptive throttle will wait between requests when a "
+            "server is throttling or erroring. Lower = retry sooner (more "
+            "aggressive); higher = gentler on strict servers. Default 30 s.")
+        self.giveup_spin = QSpinBox()
+        self.giveup_spin.setRange(0, 100000)
+        self.giveup_spin.setSpecialValueText("Never")     # 0 shows as "Never"
+        self.giveup_spin.setToolTip(
+            "Stop the run when this many requests in a row fail with no success "
+            "(a server refusing a block of tiles), then build a partial mosaic "
+            "from what downloaded and leave the rest for a re-run. 0 = never give "
+            "up (only the per-tile limit applies). Default 30.")
 
         advanced = QgsCollapsibleGroupBox("Advanced")
         advanced.setCollapsed(True)
@@ -237,6 +257,8 @@ class BasemapTileDialog(QDialog):
         aform.addRow("Parallel downloads:", self.conc_spin)
         aform.addRow("Maximum attempts per tile:", self.attempts_spin)
         aform.addRow("Minimum delay between requests:", self.min_delay_spin)
+        aform.addRow("Back-off cap:", self.backoff_cap_spin)
+        aform.addRow("Give up after (server errors in a row):", self.giveup_spin)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -427,6 +449,8 @@ class BasemapTileDialog(QDialog):
         self.conc_spin.setValue(int(s.value(f"{g}/concurrency", DEFAULT_CONCURRENCY)))
         self.attempts_spin.setValue(int(s.value(f"{g}/max_attempts", DEFAULT_MAX_ATTEMPTS)))
         self.min_delay_spin.setValue(float(s.value(f"{g}/min_delay", DEFAULT_MIN_DELAY)))
+        self.backoff_cap_spin.setValue(float(s.value(f"{g}/backoff_cap", DEFAULT_BACKOFF_CAP)))
+        self.giveup_spin.setValue(int(s.value(f"{g}/giveup_after", DEFAULT_GIVEUP_AFTER)))
 
         # Restore the last-used extent (overriding the default canvas extent that
         # setMapCanvas seeded). setOutputExtentFromUser fills the N/S/E/W fields.
@@ -458,6 +482,8 @@ class BasemapTileDialog(QDialog):
         s.setValue(f"{g}/concurrency", self.conc_spin.value())
         s.setValue(f"{g}/max_attempts", self.attempts_spin.value())
         s.setValue(f"{g}/min_delay", self.min_delay_spin.value())
+        s.setValue(f"{g}/backoff_cap", self.backoff_cap_spin.value())
+        s.setValue(f"{g}/giveup_after", self.giveup_spin.value())
         ly = self.layer_combo.currentLayer()
         s.setValue(f"{g}/layer_id", ly.id() if ly else "")
 
@@ -515,8 +541,11 @@ class BasemapTileDialog(QDialog):
         concurrency = self.conc_spin.value()
         max_attempts = self.attempts_spin.value()
         min_delay = self.min_delay_spin.value()
+        backoff_cap = self.backoff_cap_spin.value()
+        giveup_after = self.giveup_spin.value()
         valid = self.extent_widget.isValid()
         extent = self.extent_widget.outputExtent() if valid else None
         extent_crs = self.extent_widget.outputCrs().authid() if valid else None
         return (layer, extent, extent_crs, opts, out_crs, out_path, temporary,
-                resample, clip, concurrency, max_attempts, min_delay)
+                resample, clip, concurrency, max_attempts, min_delay,
+                backoff_cap, giveup_after)

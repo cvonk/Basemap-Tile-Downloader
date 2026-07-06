@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Validate the plugin's metadata.txt has the fields QGIS requires."""
 import configparser
+import os
 import sys
 
 PATH = "basemap_tile_downloader/metadata.txt"
+PKG_DIR = os.path.dirname(PATH)
 REQUIRED = ["name", "qgisMinimumVersion", "description",
             "version", "author", "email"]
 
@@ -30,6 +32,12 @@ for key in strict.options("general"):
         sys.exit(f"ERROR: metadata.txt field '{key}' fails the QGIS Plugin "
                  f"Repository's percent interpolation — write a literal '%' as "
                  f"'%%': {e}")
+
+# plugins.qgis.org requires a LICENSE file *inside* the plugin package (the repo
+# root LICENSE isn't in the git-archived package subtree), so check it ships here.
+if not os.path.isfile(os.path.join(PKG_DIR, "LICENSE")):
+    sys.exit(f"ERROR: {PKG_DIR}/LICENSE is missing — the QGIS Plugin Repository "
+             f"requires a LICENSE file inside the plugin package.")
 
 print(f"metadata.txt OK — {cp.get('general', 'name')} "
       f"v{cp.get('general', 'version')}")

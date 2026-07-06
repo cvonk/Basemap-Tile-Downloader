@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.4.12] - 2026-07-05
+### Fixed
+- Added a `LICENSE` file inside the plugin package. The QGIS Plugin Repository
+  requires one there, and the release zip archives only the package subtree, so
+  the repo-root LICENSE wasn't included. CI now checks the package LICENSE
+  exists.
+
 ## [1.4.11] - 2026-07-05
 ### Fixed
 - `metadata.txt` now parses on the QGIS Plugin Repository. Its `changelog`

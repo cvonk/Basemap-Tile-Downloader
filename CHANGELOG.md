@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.4.10] - 2026-07-05
+### Added
+- First public release on the QGIS Plugin Repository (plugins.qgis.org).
+
 ## [1.4.9] - 2026-07-05
 ### Added
 - When the fetch phase finishes and the mosaic build begins, a message-bar

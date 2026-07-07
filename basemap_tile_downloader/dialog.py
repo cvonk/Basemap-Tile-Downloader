@@ -37,6 +37,8 @@ DEFAULT_ZOOM         = 18
 DEFAULT_CONCURRENCY  = 4
 DEFAULT_MAX_ATTEMPTS = 6
 DEFAULT_MIN_DELAY    = 0.0
+DEFAULT_MAX_TILES    = 0     # per-run tile budget; 0 = no limit
+DEFAULT_REST_SECS    = 0     # rest after each macro-cell; 0 = off
 # Sourced from the engine so the dialog's defaults can't drift from the real ones.
 DEFAULT_BACKOFF_CAP  = engine.MAX_DELAY_SEC                # s; adaptive back-off ceiling
 DEFAULT_GIVEUP_AFTER = engine.MAX_CONSECUTIVE_BACKPRESSURE  # consecutive fails → give up
@@ -252,6 +254,25 @@ class BasemapTileDialog(QDialog):
             "(a server refusing a block of tiles), then build a partial mosaic "
             "from what downloaded and leave the rest for a re-run. 0 = never give "
             "up (only the per-tile limit applies). Default 30.")
+        # Polite mode: a per-run tile budget and an inter-cell rest, for servers
+        # with a daily quota or a burst limit.
+        self.max_tiles_spin = QSpinBox()
+        self.max_tiles_spin.setRange(0, 10_000_000)
+        self.max_tiles_spin.setSpecialValueText("No limit")   # 0 shows as "No limit"
+        self.max_tiles_spin.setToolTip(
+            "Stop the run after this many tiles are downloaded, then build a "
+            "partial mosaic and leave the rest pending. Re-run later to continue "
+            "(the resumable cache picks up where it left off). Use this to stay "
+            "under a server's daily quota by filling the area over several days. "
+            "0 = no limit.")
+        self.rest_spin = QSpinBox()
+        self.rest_spin.setRange(0, 3600)
+        self.rest_spin.setSuffix(" s")
+        self.rest_spin.setSpecialValueText("Off")             # 0 shows as "Off"
+        self.rest_spin.setToolTip(
+            "Pause for this long after finishing each 8×8 macro-cell. Tiles are "
+            "fetched cell by cell (like panning a map), so a rest here spreads "
+            "the load and can avoid a server's short-term burst limit. 0 = off.")
 
         advanced = QgsCollapsibleGroupBox("Advanced")
         advanced.setCollapsed(True)
@@ -261,6 +282,8 @@ class BasemapTileDialog(QDialog):
         aform.addRow("Minimum delay between requests:", self.min_delay_spin)
         aform.addRow("Back-off cap:", self.backoff_cap_spin)
         aform.addRow("Give up after (server errors in a row):", self.giveup_spin)
+        aform.addRow("Stop after (tiles this run):", self.max_tiles_spin)
+        aform.addRow("Rest after each macro-cell:", self.rest_spin)
 
         # Reset just the Advanced options above to their defaults, right-aligned
         # on its own row inside the group.
@@ -454,6 +477,8 @@ class BasemapTileDialog(QDialog):
         self.min_delay_spin.setValue(DEFAULT_MIN_DELAY)
         self.backoff_cap_spin.setValue(DEFAULT_BACKOFF_CAP)
         self.giveup_spin.setValue(DEFAULT_GIVEUP_AFTER)
+        self.max_tiles_spin.setValue(DEFAULT_MAX_TILES)
+        self.rest_spin.setValue(DEFAULT_REST_SECS)
 
     # ── settings persistence ──────────────────────────────────────────────────
     def _restore_state(self):
@@ -490,6 +515,8 @@ class BasemapTileDialog(QDialog):
         self.min_delay_spin.setValue(float(s.value(f"{g}/min_delay", DEFAULT_MIN_DELAY)))
         self.backoff_cap_spin.setValue(float(s.value(f"{g}/backoff_cap", DEFAULT_BACKOFF_CAP)))
         self.giveup_spin.setValue(int(s.value(f"{g}/giveup_after", DEFAULT_GIVEUP_AFTER)))
+        self.max_tiles_spin.setValue(int(s.value(f"{g}/max_tiles", DEFAULT_MAX_TILES)))
+        self.rest_spin.setValue(int(s.value(f"{g}/rest_seconds", DEFAULT_REST_SECS)))
 
         # Restore the last-used extent (overriding the default canvas extent that
         # setMapCanvas seeded). setOutputExtentFromUser fills the N/S/E/W fields.
@@ -523,6 +550,8 @@ class BasemapTileDialog(QDialog):
         s.setValue(f"{g}/min_delay", self.min_delay_spin.value())
         s.setValue(f"{g}/backoff_cap", self.backoff_cap_spin.value())
         s.setValue(f"{g}/giveup_after", self.giveup_spin.value())
+        s.setValue(f"{g}/max_tiles", self.max_tiles_spin.value())
+        s.setValue(f"{g}/rest_seconds", self.rest_spin.value())
         ly = self.layer_combo.currentLayer()
         s.setValue(f"{g}/layer_id", ly.id() if ly else "")
 
@@ -582,9 +611,11 @@ class BasemapTileDialog(QDialog):
         min_delay = self.min_delay_spin.value()
         backoff_cap = self.backoff_cap_spin.value()
         giveup_after = self.giveup_spin.value()
+        max_tiles = self.max_tiles_spin.value()
+        rest_seconds = self.rest_spin.value()
         valid = self.extent_widget.isValid()
         extent = self.extent_widget.outputExtent() if valid else None
         extent_crs = self.extent_widget.outputCrs().authid() if valid else None
         return (layer, extent, extent_crs, opts, out_crs, out_path, temporary,
                 resample, clip, concurrency, max_attempts, min_delay,
-                backoff_cap, giveup_after)
+                backoff_cap, giveup_after, max_tiles, rest_seconds)

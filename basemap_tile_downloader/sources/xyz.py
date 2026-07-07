@@ -85,7 +85,9 @@ def build_tile_grid(extent_geom, extent_crs, params, opts, logger):
         for tx in range(xmin, xmax + 1):
             ulx, uly, lrx, lry = tile_bounds_3857(tx, ty, zoom)
             if QgsGeometry.fromRect(QgsRectangle(ulx, lry, lrx, uly)).intersects(region):
-                tiles.append({"id": tid, "z": zoom, "x": tx, "y": ty})
+                # gx/gy are the grid indices the engine uses for macro-cell order.
+                tiles.append({"id": tid, "z": zoom, "x": tx, "y": ty,
+                              "gx": tx, "gy": ty})
                 tid += 1
 
     logger.info("Kept %d tiles intersecting the extent.", len(tiles))

@@ -132,8 +132,9 @@ def build_tile_grid(extent_geom, extent_crs, params, opts, logger):
                 skipped += 1
                 continue        # outside the raster footprint → nothing to read
             if QgsGeometry.fromRect(rect).intersects(region):
+                # gx/gy are the grid indices the engine uses for macro-cell order.
                 tiles.append({"id": tid, "xmin": xmin, "ymin": ymin,
-                              "xmax": xmax, "ymax": ymax})
+                              "xmax": xmax, "ymax": ymax, "gx": col, "gy": row})
                 tid += 1
 
     logger.info("Kept %d tiles (%d skipped as outside the raster).", len(tiles), skipped)

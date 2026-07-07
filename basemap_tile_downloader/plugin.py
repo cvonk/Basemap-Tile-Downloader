@@ -44,7 +44,7 @@ class BasemapTileDownloaderPlugin:
 
         (layer, extent, extent_crs, opts, out_crs, output_path, temporary,
          resample, clip, concurrency, max_attempts, min_delay,
-         backoff_cap, giveup_after) = dlg.values()
+         backoff_cap, giveup_after, max_tiles, rest_seconds) = dlg.values()
         if layer is None or engine.source_for(layer) is None:
             self.iface.messageBar().pushWarning(
                 MENU_TITLE, "Select a recognised WMS / WMTS / XYZ or local raster (GeoTIFF) layer.")
@@ -60,6 +60,7 @@ class BasemapTileDownloaderPlugin:
                        resample=resample, clip=clip, concurrency=concurrency,
                        max_attempts=max_attempts, min_delay=min_delay,
                        backoff_cap=backoff_cap, giveup_after=giveup_after,
+                       max_tiles=max_tiles, rest_seconds=rest_seconds,
                        on_finished=self._on_run_finished,
                        on_mosaic_start=self._on_mosaic_start)
             self._raise_log_panel()
@@ -103,6 +104,7 @@ class BasemapTileDownloaderPlugin:
         missing = max(0, total - done)      # failed + not-yet-fetched (cancelled)
         cancelled = result.get("cancelled")
         server_gave_up = result.get("server_gave_up")
+        budget_reached = s.get("budget_reached")
 
         if result.get("loaded"):
             if cancelled:
@@ -110,6 +112,11 @@ class BasemapTileDownloaderPlugin:
                     MENU_TITLE,
                     f"Cancelled — partial mosaic loaded ({done} of {total} tiles, "
                     f"{missing} missing). Re-run to fill the gaps.")
+            elif budget_reached:
+                bar.pushWarning(
+                    MENU_TITLE,
+                    f"Per-run tile budget reached — partial mosaic loaded ({done} of "
+                    f"{total} tiles, {missing} pending). Re-run to continue.")
             elif server_gave_up:
                 bar.pushWarning(
                     MENU_TITLE,

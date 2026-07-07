@@ -5,6 +5,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.4.18] - 2026-07-07
+### Added
+- **Polite mode** for rate-limited / daily-quota servers:
+  - Tiles are now fetched by walking an **8×8 grid of macro-cells** (like panning
+    a map) rather than one long raster scan, so an interrupted or budget-limited
+    run leaves a **spatially contiguous** finished region.
+  - New Advanced option **"Stop after (tiles this run)"** — a per-run tile
+    budget. The run stops, builds a partial mosaic, and leaves the rest pending;
+    a re-run resumes. Use it to fill a daily-quota server's area over several
+    days.
+  - New Advanced option **"Rest after each macro-cell"** — pause N seconds
+    between cells to ease off a server's short-term burst limit.
+- Each job now caches under its **own subdirectory** of `__btdcache__` (keyed by
+  the output filename, or the job fingerprint for a temporary output), so
+  starting a different download no longer wipes an in-progress (e.g.
+  rate-limited) job's cache.
+
+### Note
+- The cache layout changed, so a job that was in progress under a previous
+  version won't auto-resume after upgrading — finish it first, or delete the old
+  `__btdcache__`.
+
 ## [1.4.17] - 2026-07-06
 ### Added
 - A "Reset to defaults" button in the Advanced options group, restoring the five

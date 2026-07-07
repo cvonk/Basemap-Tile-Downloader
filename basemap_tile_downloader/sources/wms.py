@@ -179,8 +179,9 @@ def build_tile_grid(extent_geom, extent_crs, params, opts, logger):
             ymin = bb.yMinimum() + row * step
             xmax, ymax = xmin + step, ymin + step
             if QgsGeometry.fromRect(QgsRectangle(xmin, ymin, xmax, ymax)).intersects(region):
+                # gx/gy are the grid indices the engine uses for macro-cell order.
                 tiles.append({"id": tid, "xmin": xmin, "ymin": ymin,
-                              "xmax": xmax, "ymax": ymax})
+                              "xmax": xmax, "ymax": ymax, "gx": col, "gy": row})
                 tid += 1
 
     logger.info("Kept %d/%d tiles intersecting the extent.", len(tiles), n_cols * n_rows)

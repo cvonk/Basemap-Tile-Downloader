@@ -3,7 +3,7 @@ name=Basemap Tile Downloader
 qgisMinimumVersion=3.40.8
 description=Download a WMS, WMTS, or XYZ basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.4.17
+version=1.4.18
 author=Coert Vonk
 email=ing.c.j.s.vonk@gmail.com
 license=GPL-3.0-or-later
@@ -15,7 +15,13 @@ experimental=False
 deprecated=False
 category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.4.17 - Added a "Reset to defaults" button to the Advanced options.
+changelog=1.4.18 - Polite mode for rate-limited servers: tiles are fetched by
+    walking an 8x8 grid of macro-cells (so an interrupted run leaves a contiguous
+    area), a new "Stop after N tiles this run" budget lets you fill a daily-quota
+    server over several days via resume, and an optional rest after each cell
+    eases short-term burst limits. Each job now caches in its own subdirectory,
+    so a different download no longer wipes an in-progress one.
+    1.4.17 - Added a "Reset to defaults" button to the Advanced options.
     Removed the non-functional "Draw on Canvas" button from the extent selector.
     1.4.16 - Removed the .flake8 config from the plugin package (a hidden
     file inside the package is flagged as suspicious). It stays at the repo root

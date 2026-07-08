@@ -19,7 +19,8 @@ It:
 - Tracks progress in a resumable SQLite queue (one per job, kept beside your
   project), so an interrupted run continues where it left off and a re-run
   retries any tiles that failed previously. Starting a *different* export no
-  longer wipes an in-progress one.
+  longer wipes an in-progress one, and a cache folder can be moved or backed up
+  and still resume.
 - Fetches tiles by walking an 8×8 grid of macro-cells (like panning a map), so a
   partial result is spatially contiguous. For rate-limited or daily-quota servers
   a **"polite mode"** can stop after a set number of tiles per run (resume the
@@ -211,7 +212,8 @@ error (the completion message and `download.log` report how many failed).
 already downloaded and retries the failed ones, so the gaps fill in once the
 server cooperates. If a specific server keeps failing many parallel requests,
 lower **Parallel downloads** (to 1–2). For XYZ, `404`/`204` tiles are treated as
-legitimate gaps (no data at that tile).
+legitimate gaps (no data at that tile), and a resume won't re-request them, so it
+doesn't waste requests (or a quota tile) re-confirming known gaps.
 
 If a server refuses a whole block of tiles and keeps failing every request, the
 run **stops early** rather than grinding for hours (“Server unavailable — stopped
@@ -243,6 +245,16 @@ Providers enforce two kinds of limit, and the tools differ:
   leaves the rest pending. Re-run the next day and it continues where it left off
   (the resumable per-job cache), and because tiles are fetched in macro-cell
   order each day's partial result is a spatially contiguous block.
+
+**Can I move, back up, or restore the download cache?**
+Yes. Each export's progress lives in its own subfolder of `__btdcache__/` (next
+to your project, named after the output file): the SQLite queue plus a `tiles/`
+folder. The queue stores file paths *relative* to that subfolder, so you can
+move, copy, or restore the **whole subfolder** — queue and `tiles/` together — to
+another folder, drive, or machine, and a re-run with the same settings resumes
+without re-downloading. Just keep the queue and its `tiles/` folder as siblings.
+(Caches from before this feature stored absolute paths; those still work in place,
+but move them and their tiles will be re-fetched.)
 
 **A run failed with a WMS `ServiceException` about a file it can't open.**
 That's the *provider's* server failing to read its own data (often intermittent)

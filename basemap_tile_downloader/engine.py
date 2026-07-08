@@ -247,11 +247,11 @@ def parse_retry_after(value):
 # ─────────────────────────────────────────────
 # GEOREFERENCE A TILE  (used by every source)
 # ─────────────────────────────────────────────
-def georeference(body, out_tif, bounds, srs, detect_empty=False):
+def georeference(body, out_tif, bounds, srs):
     """
     Write raw tile bytes to a GeoTIFF stamped with `bounds`
-    (ulx, uly, lrx, lry) in CRS `srs`. Returns None on success, "EMPTY_TILE"
-    if detect_empty and the alpha band is entirely zero, or an error string.
+    (ulx, uly, lrx, lry) in CRS `srs`. Returns None on success, or an error
+    string. A fully-transparent tile is written like any other (not dropped).
     """
     if gdal is None:
         raise DownloaderError("GDAL bindings unavailable; cannot georeference tiles.")
@@ -264,14 +264,6 @@ def georeference(body, out_tif, bounds, srs, detect_empty=False):
             return "GDAL: cannot open tile (not an image?)."
         if ds.RasterXSize == 0 or ds.RasterCount == 0:
             return "Zero-size raster."
-        if detect_empty and ds.RasterCount >= 4:
-            alpha = ds.GetRasterBand(4)
-            try:
-                stats = alpha.ComputeStatistics(True)
-            except Exception:
-                stats = alpha.GetStatistics(True, True)
-            if stats[1] == 0:
-                return "EMPTY_TILE"
         ulx, uly, lrx, lry = bounds
         gdal.Translate(out_tif, ds, options=gdal.TranslateOptions(
             format="GTiff", outputSRS=srs, outputBounds=[ulx, uly, lrx, lry]))
@@ -359,10 +351,19 @@ _META_DDL = "CREATE TABLE IF NOT EXISTS job_meta (key TEXT PRIMARY KEY, value TE
 class TileQueue:
     def __init__(self, db_path, logger):
         self.db_path, self.logger = db_path, logger
+        self.work_dir = os.path.dirname(db_path)
         self._c = sqlite3.connect(db_path, timeout=30, isolation_level=None)
         self._c.execute("PRAGMA journal_mode=WAL;")
         self._c.execute(_TILES_DDL)
         self._c.execute(_META_DDL)
+
+    def _resolve(self, p):
+        """Absolute path for a stored file_path. New rows are stored relative to
+        the job's work_dir (so the cache is relocatable); legacy rows are already
+        absolute and are used as-is."""
+        if not p:
+            return p
+        return os.path.normpath(p if os.path.isabs(p) else os.path.join(self.work_dir, p))
 
     def populate_if_empty(self, tiles, meta, work_dir=None):
         stored_fp = None
@@ -405,10 +406,13 @@ class TileQueue:
                 "WHERE status='failed'").rowcount
             # Also re-queue 'done' tiles whose cached file has gone missing (cache
             # cleared/moved, or a partial cleanup); otherwise the run would finish
-            # with nothing to mosaic and fail with "No tiles downloaded".
+            # with nothing to mosaic and fail with "No tiles downloaded". A NULL
+            # file_path is an intentionally empty tile (a legitimate 404/204 gap),
+            # NOT a lost file — leave those alone so a resume doesn't waste a
+            # request (and a quota tile) re-confirming every known gap.
             missing = [(tid,) for tid, fp in self._c.execute(
                            "SELECT id, file_path FROM tiles WHERE status='done'")
-                       if not fp or not os.path.exists(fp)]
+                       if fp and not os.path.exists(self._resolve(fp))]
             if missing:
                 self._c.executemany(
                     "UPDATE tiles SET status='pending', attempts=0, last_error=NULL "
@@ -448,18 +452,25 @@ class TileQueue:
                         (attempts, datetime.now(timezone.utc).isoformat(), tid))
 
     def mark_done(self, tid, path):
+        # Store the path relative to work_dir (forward slashes) so the cache can
+        # be moved/restored elsewhere and still resume; None for an empty tile.
+        rel = os.path.relpath(path, self.work_dir).replace(os.sep, "/") if path else None
         self._c.execute(
             "UPDATE tiles SET status='done',file_path=?,last_error=NULL,updated_at=? WHERE id=?",
-            (path, datetime.now(timezone.utc).isoformat(), tid))
+            (rel, datetime.now(timezone.utc).isoformat(), tid))
 
     def mark_failed(self, tid, err):
         self._c.execute("UPDATE tiles SET status='failed',last_error=?,updated_at=? WHERE id=?",
                         (str(err)[:2000], datetime.now(timezone.utc).isoformat(), tid))
 
     def done_file_paths(self):
-        return [r[0] for r in self._c.execute(
-                    "SELECT file_path FROM tiles WHERE status='done' AND file_path IS NOT NULL")
-                if r[0] and os.path.exists(r[0])]
+        out = []
+        for (p,) in self._c.execute(
+                "SELECT file_path FROM tiles WHERE status='done' AND file_path IS NOT NULL"):
+            ap = self._resolve(p)
+            if ap and os.path.exists(ap):
+                out.append(ap)
+        return out
 
     def close(self):
         try: self._c.close()
@@ -534,16 +545,16 @@ def migrate_flat_cache(work_dir, fp, logger):
             logger.warning("Could not migrate %s: %s", name, e)
 
     # The moved DB still records tile paths at the OLD flat location; repoint them
-    # at the new tiles/ dir so already-downloaded tiles are reused, not re-fetched.
+    # (relative to the new work_dir) so already-downloaded tiles are reused, not
+    # re-fetched — and so the migrated cache is itself relocatable afterwards.
     try:
-        new_tiles = os.path.join(work_dir, "tiles")
         con = sqlite3.connect(os.path.join(work_dir, "tiles.sqlite"))
         rows = con.execute(
             "SELECT id, file_path FROM tiles WHERE file_path IS NOT NULL").fetchall()
         for tid, fpth in rows:
             if fpth:
                 con.execute("UPDATE tiles SET file_path=? WHERE id=?",
-                            (os.path.join(new_tiles, os.path.basename(fpth)), tid))
+                            ("tiles/" + os.path.basename(fpth), tid))
         con.commit()
         con.close()
     except Exception as e:
@@ -815,9 +826,9 @@ class BasemapTileDownloadTask(QgsTask):
             # Reset by any successful tile; trips at MAX_CONSECUTIVE_BACKPRESSURE.
             consecutive_bp = 0
             # Polite mode: tiles downloaded *this run* (for the per-run budget),
-            # and the macro-cell of the last-dispatched tile (for inter-cell rest).
+            # and the highest macro-cell dispatched so far (for the inter-cell rest).
             run_done = 0
-            last_cell = None
+            max_cell = -1
             logger.info("%s with concurrency=%d (back-off cap %.0fs, give up "
                         "after %s consecutive failures)", self._t_ing, self._concurrency,
                         self._backoff_cap,
@@ -829,27 +840,33 @@ class BasemapTileDownloadTask(QgsTask):
                 logger.info("Resting %.0fs after each macro-cell.", self._rest_seconds)
 
             with ThreadPoolExecutor(max_workers=self._concurrency) as pool:
-                while (pending or in_flight) and not self.isCanceled() \
-                        and not self.server_gave_up and not self.budget_reached:
-                    # Fill the pool, pacing each dispatch with the throttle so
-                    # the overall request rate stays adaptive.
-                    while pending and len(in_flight) < self._concurrency:
+                while pending or in_flight:
+                    # Fill the pool (pacing each dispatch with the throttle), but
+                    # stop dispatching new tiles once cancelled / circuit-broken /
+                    # over the per-run budget. Already-running fetches are still
+                    # drained below — the pool waits for them on shutdown anyway,
+                    # so we record their results instead of discarding and
+                    # re-fetching (and re-spending a quota tile) next run.
+                    while pending and len(in_flight) < self._concurrency \
+                            and not self.isCanceled() and not self.server_gave_up \
+                            and not self.budget_reached:
                         throttle.wait(self.isCanceled)
                         if self.isCanceled():
                             break
                         tid, tile, attempts, backpressure = pending.popleft()
-                        # Polite mode: rest when the forward sweep crosses into a
-                        # new macro-cell (retries re-appended out of order simply
-                        # don't trigger a rest).
+                        # Polite mode: rest only when the forward sweep first enters
+                        # a *later* macro-cell. Retries of earlier cells (re-appended
+                        # out of order) have a lower cell index, so they don't rest.
                         cell = tile.get("cell")
-                        if self._rest_seconds and last_cell is not None \
-                                and cell is not None and cell != last_cell:
+                        if self._rest_seconds and cell is not None \
+                                and max_cell >= 0 and cell > max_cell:
                             logger.info("Finished a macro-cell; resting %.0fs.",
                                         self._rest_seconds)
                             self._sleep(self._rest_seconds)
                             if self.isCanceled():
                                 break
-                        last_cell = cell
+                        if cell is not None and cell > max_cell:
+                            max_cell = cell
                         out_path = os.path.join(tiles_dir, f"tile_{tid:06d}.tif")
                         fut = pool.submit(self._fetch_worker, tile, out_path)
                         in_flight[fut] = [tid, tile, attempts, backpressure]
@@ -942,18 +959,16 @@ class BasemapTileDownloadTask(QgsTask):
                                 "remaining tiles and building a partial mosaic from "
                                 "the %d downloaded so far; re-run later to fill the "
                                 "gaps.", consecutive_bp, throttle.status(), done_count)
-                            break
 
                         # Per-run tile budget: stop cleanly once we've downloaded
                         # the requested number of tiles this run, so a daily-quota
                         # server can be filled over several days (resume continues).
-                        if self._max_tiles and run_done >= self._max_tiles:
+                        elif self._max_tiles and run_done >= self._max_tiles:
                             self.budget_reached = True
                             logger.warning(
                                 "Reached the per-run tile budget (%d tiles this run). "
                                 "Stopping; the rest stay pending — re-run later to "
                                 "continue.", self._max_tiles)
-                            break
                         if processed % 25 == 0:
                             logger.info("Checkpoint %d/%d (done=%d, failed=%d)",
                                         done_n, total, done_count, failed_count)

@@ -5,6 +5,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.4.22] - 2026-07-08
+### Changed
+- Fully-transparent tiles are now kept and mosaicked like any other tile — WMS no
+  longer drops them — so a WMS export covers the whole grid over the extent.
+- The tile cache stores file paths **relative** to the job folder, so an
+  `__btdcache__` job can be moved, restored, or backed up to a different
+  folder/drive/machine and still resume. Existing caches with absolute paths keep
+  working (paths are resolved either way).
+- A local raster (GeoTIFF) is exported at its true **native resolution**
+  regardless of the (greyed) resolution field.
+### Fixed
+- Resuming a job no longer re-requests known-empty tiles (legitimate 404/204
+  gaps) — previously each resume wasted a request, and a daily-quota tile, on
+  every gap.
+- Stopping on the per-run tile budget (or cancel / circuit breaker) now records
+  the fetches already in flight instead of discarding them (the pool waits for
+  them regardless), so they aren't re-fetched next run.
+- The inter-cell rest now fires only on forward progress into a new macro-cell; a
+  retried tile from an earlier cell no longer triggers a spurious pause.
+
 ## [1.4.21] - 2026-07-07
 ### Changed
 - A local raster (GeoTIFF) is **read/exported**, not downloaded, and the plugin's

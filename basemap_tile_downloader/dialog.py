@@ -135,6 +135,7 @@ class BasemapTileDialog(QDialog):
         self.setWindowTitle(_window_title())
         self.setMinimumWidth(500)
         self._last_source = None
+        self._src_cache = (None, None)   # (layer, SOURCE_NAME) — see _current_source_name
 
         form = QFormLayout()
 
@@ -335,9 +336,13 @@ class BasemapTileDialog(QDialog):
         self.layer_combo.setExceptedLayerList(excepted)
 
     def _current_source_name(self):
+        # Memoised: source_for() runs every backend's detect(), and this is called
+        # several times per interaction — recompute only when the layer changes.
         layer = self.layer_combo.currentLayer()
-        src = engine.source_for(layer) if layer else None
-        return src.SOURCE_NAME if src else None
+        if layer is not self._src_cache[0]:
+            src = engine.source_for(layer) if layer else None
+            self._src_cache = (layer, src.SOURCE_NAME if src else None)
+        return self._src_cache[1]
 
     def _set_row_visible(self, label, field, visible):
         label.setVisible(visible); field.setVisible(visible)
@@ -462,7 +467,11 @@ class BasemapTileDialog(QDialog):
                 bb = self._extent_bbox_in(QgsCoordinateReferenceSystem(params["crs"]))
                 if bb is None:
                     return None
-                step = self.tile_spin.value() * self.res_spin.value()
+                # GeoTIFF is exported at its native resolution (the field is
+                # greyed), so estimate with that, not the spinbox value.
+                res = (params.get("native_res") if name == "GeoTIFF"
+                       else self.res_spin.value()) or self.res_spin.value()
+                step = self.tile_spin.value() * res
                 if step <= 0:
                     return None
                 return (max(1, math.ceil(bb.width() / step)) *

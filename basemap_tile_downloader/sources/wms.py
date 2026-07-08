@@ -284,9 +284,9 @@ def fetch_one_tile(params, opts, tile, out_path, logger):
         raise TileFetchError("Empty response body.")
 
     bounds = (tile["xmin"], tile["ymax"], tile["xmax"], tile["ymin"])   # ulx,uly,lrx,lry
-    problem = engine.georeference(body, out_path, bounds, params["crs"], detect_empty=True)
-    if problem == "EMPTY_TILE":
-        return None
+    # A fully-transparent tile is kept and mosaicked like any other tile (not
+    # dropped), so the output covers the whole grid over the extent.
+    problem = engine.georeference(body, out_path, bounds, params["crs"])
     if problem:
         raise TileFetchError(f"Invalid image: {problem}")
     return out_path

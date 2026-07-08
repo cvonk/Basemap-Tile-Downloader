@@ -98,7 +98,10 @@ def mosaic_hints(params, opts):
 # ─────────────────────────────────────────────
 def build_tile_grid(extent_geom, extent_crs, params, opts, logger):
     tile_pixels = int(opts.get("tile_pixels", 1024))
-    resolution  = float(opts.get("resolution", 0.5))
+    # A local raster is exported at its own native pixel size (the dialog greys
+    # out the resolution field), so use the source resolution rather than
+    # opts["resolution"] — which the greyed spinbox may not represent exactly.
+    resolution  = float(params.get("native_res") or opts.get("resolution", 0.5))
 
     req_crs = QgsCoordinateReferenceSystem(params["crs"])
     if not req_crs.isValid():

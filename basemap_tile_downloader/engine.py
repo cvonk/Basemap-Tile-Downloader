@@ -886,8 +886,11 @@ class BasemapTileDownloadTask(QgsTask):
                             done_count += 1
                             run_done += 1          # counts toward the per-run budget
                             consecutive_bp = 0     # a success resets the circuit breaker
-                            logger.info("Tile %d OK%s", tid,
-                                        "" if outcome == "ok" else " (empty/missing)")
+                            # DEBUG (file log only): one line per tile would flood
+                            # the QGIS Message Log panel; the periodic Checkpoint
+                            # line below is the panel's progress indicator.
+                            logger.debug("Tile %d OK%s", tid,
+                                         "" if outcome == "ok" else " (empty/missing)")
                         elif outcome in ("throttle", "timeout", "server_error"):
                             # Back-pressure: slow the whole run down and retry the
                             # tile without spending its error budget — the tile is

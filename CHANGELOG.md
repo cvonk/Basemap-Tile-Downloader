@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-07-08
+### Changed
+- The per-tile "Tile N OK" message is now logged at DEBUG (to `download.log`
+  only), not to the QGIS **Message Log** panel — a large run no longer floods and
+  truncates the panel. The periodic "Checkpoint N/M" line remains the panel's
+  progress indicator, and `download.log` still records every tile.
+
 ## [1.5.1] - 2026-07-08
 ### Changed
 - Declare QGIS 4 support via `qgisMaximumVersion=4.99` and remove the deprecated

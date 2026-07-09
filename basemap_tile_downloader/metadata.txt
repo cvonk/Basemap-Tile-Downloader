@@ -4,7 +4,7 @@ qgisMinimumVersion=3.40.8
 qgisMaximumVersion=4.99
 description=Download a WMS, WMTS, or XYZ basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.5.1
+version=1.5.2
 author=Coert Vonk
 email=ing.c.j.s.vonk@gmail.com
 license=GPL-3.0-or-later
@@ -16,7 +16,10 @@ experimental=False
 deprecated=False
 category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.5.1 - Declare QGIS 4 support via qgisMaximumVersion=4.99 and drop the
+changelog=1.5.2 - Per-tile success is logged to download.log only (DEBUG), not
+    to the QGIS Message Log panel, so a large run no longer floods and truncates
+    the panel. The periodic Checkpoint line stays the panel's progress indicator.
+    1.5.1 - Declare QGIS 4 support via qgisMaximumVersion=4.99 and drop the
     deprecated supportsQt6 flag (QGIS 4 eligibility is now taken from
     qgisMaximumVersion).
     1.5.0 - QGIS 4 / Qt 6 support: the plugin now runs on QGIS 4.2 as well

@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-07-09
+### Added
+- When the extent is taken from a layer (*Calculate from Layer*) that has **more
+  than one feature**, the dialog warns before starting. The extent is the
+  bounding box of *all* features, so a stray or unwanted feature can silently
+  enlarge the download area — e.g. a vertex near 0,0 in EPSG:3857 drops the South
+  to 0. You can still proceed if the multi-feature extent is intended.
+
 ## [1.5.3] - 2026-07-08
 ### Changed
 - When a re-run would just **resume** an existing job (a cache with the matching

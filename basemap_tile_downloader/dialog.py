@@ -19,8 +19,8 @@ from qgis.PyQt.QtWidgets import (
     QMenu, QFileDialog, QMessageBox, QComboBox, QCheckBox, QPushButton,
 )
 from qgis.core import (
-    QgsProject, QgsMapLayerProxyModel, QgsRasterLayer, QgsSettings, QgsRectangle,
-    QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+    QgsProject, QgsMapLayerProxyModel, QgsRasterLayer, QgsVectorLayer, QgsSettings,
+    QgsRectangle, QgsCoordinateReferenceSystem, QgsCoordinateTransform,
 )
 from qgis.gui import (
     QgsMapLayerComboBox, QgsProjectionSelectionWidget, QgsCollapsibleGroupBox,
@@ -602,10 +602,43 @@ class BasemapTileDialog(QDialog):
         v = self.values()   # (layer, extent, extent_crs, opts, out_crs, out_path, temporary, …)
         return engine.has_resumable_cache(v[0], v[1], v[2], v[3], v[5], v[6])
 
+    def _multi_feature_extent_warning(self):
+        """When the extent was taken from a layer (Calculate from Layer), the
+        extent is the bounding box of *all* its features — so a stray or unwanted
+        feature silently enlarges it (e.g. a vertex near 0,0 in EPSG:3857 pulls
+        the South down to 0). Return a warning if that layer has more than one
+        feature, else None."""
+        try:
+            if self.extent_widget.extentState() != \
+                    QgsExtentWidget.ExtentState.ProjectLayerExtent:
+                return None
+            name = self.extent_widget.extentLayerName()
+            for lyr in (QgsProject.instance().mapLayersByName(name) if name else []):
+                if isinstance(lyr, QgsVectorLayer):
+                    n = lyr.featureCount()
+                    if n and n > 1:
+                        return (f"The extent comes from layer “{name}”, which has "
+                                f"{n} features. The extent is the bounding box of "
+                                f"ALL of them, so a stray or unwanted feature can "
+                                f"enlarge it unexpectedly (e.g. a vertex near 0,0 "
+                                f"drops the South to 0). Use this extent anyway?")
+        except Exception:
+            pass
+        return None
+
     def accept(self):
         # Resuming an existing job just continues it, so skip both the
         # large-download/ToS reminder and the overwrite-output prompt.
         resuming = self._would_resume()
+
+        # The extent came from a multi-feature layer? Its bbox spans all features,
+        # so warn before an unwanted feature silently blows up the download area.
+        aoi_warn = None if resuming else self._multi_feature_extent_warning()
+        if aoi_warn and QMessageBox.question(
+                self, "Extent layer has multiple features", aoi_warn,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return          # keep the dialog open
 
         n = self._estimate_tiles()
         name = self._current_source_name()

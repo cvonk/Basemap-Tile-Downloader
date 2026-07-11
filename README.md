@@ -184,6 +184,18 @@ matches (right-click the layer ▸ **Export ▸ Save Features As…** and choose
 target CRS) — or, if its assigned CRS is simply wrong, fix it under the layer's
 **Properties ▸ Source ▸ Assigned CRS**. Then pick the layer again.
 
+**Does the extent (AOI) layer need the same CRS as the source layer?**
+No. The extent is reprojected automatically: **Calculate from Layer** transforms
+the AOI layer's bounding box into the project CRS, and the plugin then reprojects
+that to whatever the source needs (EPSG:3857 for XYZ, the request CRS for WMS,
+the tile-matrix-set CRS for WMTS, or the raster's CRS for a local GeoTIFF). So
+the AOI, the project, and the source can all be in different CRSs. The only real
+requirement is that each layer's **assigned CRS is correct** — a *mislabelled*
+AOI CRS is what produces a wrong or `NaN`/0 extent (see the previous entry).
+Because the extent is a reprojected bounding box, for an oblique CRS it may be a
+little larger than the tight box in the source CRS — harmless, just a few extra
+edge tiles.
+
 **Why is my map blurry?**
 Check that the resolution / zoom and the coordinate reference systems suit your
 source. For XYZ, requesting a zoom finer than the provider serves only

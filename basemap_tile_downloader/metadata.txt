@@ -4,7 +4,7 @@ qgisMinimumVersion=3.40.8
 qgisMaximumVersion=4.99
 description=Download a WMS, WMTS, or XYZ basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.6.0
+version=1.7.0
 author=Coert Vonk
 email=ing.c.j.s.vonk@gmail.com
 license=GPL-3.0-or-later
@@ -16,7 +16,16 @@ experimental=False
 deprecated=False
 category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.6.0 - Removed the "polite mode" macro-cell features (Stop after N
+changelog=1.7.0 - Shared tile cache: overlapping areas now reuse each other's
+    tiles (XYZ, WMTS and WMS) from a shared folder, skipping the repeat request
+    and the provider-quota hit; WMS tiles are anchored to the CRS origin so they
+    line up across areas (output size unchanged; a resumed pre-1.7.0 WMS job keeps
+    its tiles and is not re-downloaded). The Message Log shows a growing progress
+    bar (0...10...20...100). Fixes: a download could be garbage-collected and
+    silently do nothing before it started; the completion/cancel message now
+    appears immediately instead of on the next run; resuming a pre-1.7.0 WMS job
+    no longer errors.
+    1.6.0 - Removed the "polite mode" macro-cell features (Stop after N
     tiles, Rest after each macro-cell, and the 8x8 fetch ordering). Tiles fetch
     in natural order; the adaptive throttle, minimum delay, give-up threshold and
     resumable cache still handle rate-limited and daily-quota servers (run, stop,

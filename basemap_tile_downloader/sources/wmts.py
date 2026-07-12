@@ -76,6 +76,29 @@ def fingerprint_parts(params, opts):
             opts.get("zoom")]
 
 
+# WMTS tiles have a global identity (matrix/col/row within a tile-matrix-set),
+# so overlapping AOIs reuse each other's tiles from the shared cache.
+SHAREABLE = True
+
+
+def shared_signature(params, opts):
+    """Identity of the tile source for the cross-job shared cache: the endpoint,
+    layer, matrix set, style and format — independent of extent and zoom (the
+    matrix index is in each tile's path)."""
+    return "wmts\n" + "\n".join(str(params.get(k, "")) for k in
+                                ("caps_url", "layer", "tile_matrix_set",
+                                 "style", "format"))
+
+
+def shared_rel_path(tile):
+    """Path (under the source's shared dir) for this tile's global identity (the
+    matrix index is stable across jobs for a given tile-matrix-set), or None if
+    the tile lacks the expected keys (a resumed legacy queue)."""
+    if not {"m", "col", "row"} <= tile.keys():
+        return None
+    return "{}/{}/{}.tif".format(tile["m"], tile["col"], tile["row"])
+
+
 # ─────────────────────────────────────────────
 # CAPABILITIES PARSING  (prepare hook)
 # ─────────────────────────────────────────────

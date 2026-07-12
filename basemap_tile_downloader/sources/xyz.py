@@ -60,6 +60,25 @@ def fingerprint_parts(params, opts):
     return [params["template"], opts.get("zoom")]
 
 
+# XYZ tiles have a global identity ({z}/{x}/{y} on a fixed template), so
+# overlapping AOIs reuse each other's tiles from the shared cache.
+SHAREABLE = True
+
+
+def shared_signature(params, opts):
+    """Identity of the tile source for the cross-job shared cache: the URL
+    template, independent of extent and zoom (the zoom is in each tile's path)."""
+    return "xyz\n" + params["template"]
+
+
+def shared_rel_path(tile):
+    """Path (under the source's shared dir) for this tile's global identity, or
+    None if the tile lacks the expected keys (a resumed legacy queue)."""
+    if not {"z", "x", "y"} <= tile.keys():
+        return None
+    return "{}/{}/{}.tif".format(tile["z"], tile["x"], tile["y"])
+
+
 # ─────────────────────────────────────────────
 # TILE GRID
 # ─────────────────────────────────────────────

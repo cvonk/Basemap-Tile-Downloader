@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """WMS source backend for the Basemap Tile Downloader (GetMap over an extent)."""
 
+import math
 import urllib.parse
 import xml.etree.ElementTree as ET
 
@@ -11,7 +12,6 @@ from qgis.core import (
 
 from .. import engine, safexml
 from ..engine import DownloaderError, TileFetchError
-from ..tilemath import wms_grid_dims
 
 SOURCE_NAME = "WMS"
 INITIAL_DELAY_SEC = 1.0        # WMS servers are often stricter; start gently
@@ -83,6 +83,40 @@ def default_out_crs(params):
 def fingerprint_parts(params, opts):
     return [params["url"], ",".join(sorted(params["layers"])), params["crs"],
             opts.get("tile_pixels"), opts.get("resolution")]
+
+
+# WMS GetMap tiles become reusable across jobs once the grid is anchored to the
+# CRS origin (see build_tile_grid): the same (endpoint, layers, styles, CRS,
+# format, resolution, tile size) yields identical tiles, addressed by global
+# col/row. Unlike XYZ/WMTS, the resolution and tile size define the grid itself,
+# so they belong in the signature rather than in each tile's path.
+SHAREABLE = True
+
+
+def shared_signature(params, opts):
+    """Identity of a GetMap tile's content (everything but its position): the
+    endpoint, layers, styles, CRS, negotiated format, tile size and resolution,
+    plus any extra GetMap parameters that change the pixels."""
+    parts = [params.get("url", ""),
+             ",".join(params.get("layers") or []),
+             ",".join(params.get("styles") or []),
+             params.get("crs", ""),
+             params.get("format", ""),
+             str(int(opts.get("tile_pixels", 1024))),
+             repr(float(opts.get("resolution", 0.5)))]
+    extra = params.get("extra") or {}
+    parts += ["{}={}".format(k, extra[k]) for k in sorted(extra)]
+    return "wms\n" + "\n".join(parts)
+
+
+def shared_rel_path(tile):
+    """Path (under the source's shared dir) for this tile's global identity, or
+    None if the tile predates the origin-anchored grid — a resumed pre-1.7.0 WMS
+    queue has no col/row, so those tiles fall back to per-job storage instead of
+    crashing (and are not re-downloaded)."""
+    if "col" not in tile or "row" not in tile:
+        return None
+    return "{}/{}.tif".format(tile["col"], tile["row"])
 
 
 # ─────────────────────────────────────────────
@@ -168,22 +202,30 @@ def build_tile_grid(extent_geom, extent_crs, params, opts, logger):
     if step <= 0:
         raise DownloaderError("Tile size in map units is ≤ 0 – check resolution.")
 
-    n_cols, n_rows = wms_grid_dims(bb.width(), bb.height(), step)
+    # Anchor the grid to the CRS origin (0,0), not the extent's own corner, so
+    # the same (CRS, resolution, tile size) yields identical tile boundaries for
+    # any extent — letting overlapping AOIs reuse tiles from the shared cache.
+    # Tiles are addressed by their global integer column/row. The exact-extent
+    # crop still trims the final mosaic, so the output isn't enlarged.
+    c0 = math.floor(bb.xMinimum() / step); c1 = math.floor(bb.xMaximum() / step)
+    r0 = math.floor(bb.yMinimum() / step); r1 = math.floor(bb.yMaximum() / step)
+    n_grid = (c1 - c0 + 1) * (r1 - r0 + 1)
     logger.info("Extent bbox (req CRS): %s", bb.toString())
-    logger.info("Grid: %d×%d tiles, %.2f map-units/tile", n_cols, n_rows, step)
+    logger.info("Grid: %d×%d tiles, %.2f map-units/tile (origin-anchored)",
+                c1 - c0 + 1, r1 - r0 + 1, step)
 
     tiles, tid = [], 0
-    for row in range(n_rows):
-        for col in range(n_cols):
-            xmin = bb.xMinimum() + col * step
-            ymin = bb.yMinimum() + row * step
+    for row in range(r0, r1 + 1):
+        for col in range(c0, c1 + 1):
+            xmin = col * step; ymin = row * step
             xmax, ymax = xmin + step, ymin + step
             if QgsGeometry.fromRect(QgsRectangle(xmin, ymin, xmax, ymax)).intersects(region):
-                tiles.append({"id": tid, "xmin": xmin, "ymin": ymin,
+                tiles.append({"id": tid, "col": col, "row": row,
+                              "xmin": xmin, "ymin": ymin,
                               "xmax": xmax, "ymax": ymax})
                 tid += 1
 
-    logger.info("Kept %d/%d tiles intersecting the extent.", len(tiles), n_cols * n_rows)
+    logger.info("Kept %d/%d tiles intersecting the extent.", len(tiles), n_grid)
     if not tiles:
         raise DownloaderError("No tiles intersect the extent.")
     return tiles

@@ -247,6 +247,21 @@ without re-downloading. Just keep the queue and its `tiles/` folder as siblings.
 (Caches from before this feature stored absolute paths; those still work in place,
 but move them and their tiles will be re-fetched.)
 
+**I download overlapping areas — can it reuse tiles between them?**
+Yes, for **XYZ**, **WMTS** and **WMS** sources. Their tiles have a fixed global
+identity (`{z}/{x}/{y}` for XYZ, matrix/col/row for WMTS, and — because the WMS
+grid is anchored to the CRS origin — global col/row for WMS), so a tile one area
+already fetched is reused by any overlapping area at the same settings: no repeat
+request, and no hit against the provider's quota. These shared tiles live in
+`__btdcache__/shared/<source>/`, separate from the per-job folders and keyed by
+the source so different providers or settings never mix (for WMS the key covers
+the endpoint, layers, styles, CRS, format, resolution and tile size — change any
+and it's a different set). Delete that `shared/` folder to clear it (e.g. if a
+provider refreshes its imagery). A local GeoTIFF isn't downloaded, so nothing is
+cached for it. Note WMS tiles now align to the CRS origin rather than the
+extent's corner, so overlapping WMS exports share a pixel grid; the exact-extent
+crop still trims the final mosaic, so the output isn't enlarged.
+
 **A run failed with a WMS `ServiceException` about a file it can't open.**
 That's the *provider's* server failing to read its own data (often intermittent)
 — not a plugin or network problem on your side. Wait and re-run; the failed

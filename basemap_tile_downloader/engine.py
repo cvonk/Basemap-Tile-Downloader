@@ -507,6 +507,30 @@ def job_base_dir():
             if project.fileName() else QgsApplication.qgisSettingsDirPath())
 
 
+# A shared tile whose fetch returned "no tile here" (404/204) is recorded with a
+# zero-byte sentinel, so an overlapping AOI doesn't re-request the known gap.
+SHARED_EMPTY_SUFFIX = ".empty"
+
+
+def shared_source_dir(work_dir, source, params, opts):
+    """Directory of tiles reusable across jobs from the same source, beside the
+    per-job dirs (…/__btdcache__/shared/<signature>/). Its tiles are keyed by a
+    global identity ({z}/{x}/{y} for XYZ, matrix/col/row for WMTS, globally-
+    snapped col/row for WMS), so overlapping AOIs reuse each other's tiles.
+    Returns None for a source with no global tile identity (a local raster isn't
+    fetched) — that keeps its per-job tiles. The signature takes `opts` because
+    for WMS the resolution/tile size define the grid itself (unlike the zoom /
+    matrix that XYZ / WMTS already carry in each tile's identity)."""
+    if not getattr(source, "SHAREABLE", False):
+        return None
+    try:
+        sig = hashlib.sha256(
+            source.shared_signature(params, opts).encode()).hexdigest()[:16]
+    except Exception:
+        return None
+    return os.path.join(os.path.dirname(work_dir), "shared", sig)
+
+
 def has_resumable_cache(layer, extent, extent_crs, opts, output_path, temporary):
     """True if a work queue already exists for this exact job (same source,
     params, extent and output) with tiles in it — i.e. a run would *resume* it
@@ -666,6 +690,14 @@ def build_mosaic(tile_paths, work_dir, logger, tif_path, native_crs, out_crs,
 # ─────────────────────────────────────────────
 # QGSTASK
 # ─────────────────────────────────────────────
+# Strong references to in-flight tasks. QGIS's task manager owns the C++ task,
+# but that does NOT keep the Python wrapper alive — without a Python reference the
+# subclass (and its overridden run()/finished()) can be garbage-collected before
+# it runs, so the task silently does nothing. run() adds the task here; finished()
+# removes it.
+_ACTIVE_TASKS = set()
+
+
 class BasemapTileDownloadTask(QgsTask):
     # Emitted (from the worker thread) when the fetch phase ends and the mosaic
     # build begins. Connected to a bound-method slot on this main-thread QObject,
@@ -678,7 +710,7 @@ class BasemapTileDownloadTask(QgsTask):
                  clip=False, concurrency=CONCURRENCY,
                  max_attempts=MAX_ATTEMPTS_PER_TILE, min_delay=0.0,
                  backoff_cap=MAX_DELAY_SEC, giveup_after=MAX_CONSECUTIVE_BACKPRESSURE,
-                 cache_key=None, on_mosaic_start=None):
+                 cache_key=None, on_mosaic_start=None, on_finished=None):
         # Silent: suppress QGIS's own task-finished/terminated notifications — the
         # plugin posts its own completion (and error) messages, so QGIS's generic
         # one is just noise, especially after a failure. (Silent needs QGIS 3.26+;
@@ -731,6 +763,7 @@ class BasemapTileDownloadTask(QgsTask):
         # Connect on the main thread (where the task is built) to a bound method,
         # so emitting from the worker thread is auto-delivered as a queued signal.
         self._on_mosaic_start = on_mosaic_start
+        self._on_finished     = on_finished
         self.mosaicStarted.connect(self._handle_mosaic_started)
 
     def _handle_mosaic_started(self):
@@ -752,6 +785,51 @@ class BasemapTileDownloadTask(QgsTask):
             self.exception = e
             self.logger.error("Unexpected: %s\n%s", e, traceback.format_exc())
             return False
+
+    def finished(self, result):
+        """Main-thread completion hook. QGIS calls this after run() returns —
+        for success, failure, or cancellation alike — so doing the UI work here
+        (rather than from the manager's taskCompleted/taskTerminated signals)
+        makes the completion message appear immediately, including after a cancel.
+        `result` is what run() returned (True even on cancel: a partial mosaic is
+        still built)."""
+        _ACTIVE_TASKS.discard(self)     # release the strong ref kept in run()
+        release_logger()
+        loaded = False
+        tif = self.result_tif_path
+        # Load the mosaic whenever one was produced — including a partial mosaic
+        # from a cancelled run — so the user can see the gaps.
+        if tif and os.path.exists(tif):
+            layer_name = os.path.splitext(os.path.basename(tif))[0].replace("_", " ")
+            lyr = QgsRasterLayer(tif, layer_name)
+            if lyr.isValid():
+                QgsProject.instance().addMapLayer(lyr)
+                loaded = True
+                print(f"[Basemap Tile Downloader] Mosaic loaded: {tif}")
+            else:
+                msg = f"Mosaic file invalid: {tif}"
+                print(f"[Basemap Tile Downloader] WARNING: {msg}")
+                QgsMessageLog.logMessage(msg, LOG_TAB, Qgis.Critical)
+        elif not result and not self.was_cancelled:
+            msg = str(self.exception) if self.exception else "Task failed."
+            print(f"[Basemap Tile Downloader] FAILED: {msg}")
+            QgsMessageLog.logMessage(f"Task failed: {msg}", LOG_TAB, Qgis.Critical)
+
+        if callable(self._on_finished):
+            try:
+                self._on_finished({
+                    "success":   bool(result),
+                    "loaded":    loaded,
+                    "cancelled": bool(self.was_cancelled),
+                    "server_gave_up": bool(self.server_gave_up),
+                    "local":     bool(getattr(self, "_local", False)),
+                    "tif":       tif,
+                    "summary":   self.summary or {},
+                    "error":     (str(self.exception)
+                                  if (not result and self.exception) else None),
+                })
+            except Exception:
+                pass
 
     def _run_impl(self):
         logger = self.logger
@@ -813,6 +891,35 @@ class BasemapTileDownloadTask(QgsTask):
             start = queue.counts()
             done_count   = start.get("done", 0)
             failed_count = start.get("failed", 0)
+
+            # Cross-job shared cache: XYZ/WMTS tiles have a global identity, so a
+            # tile another (overlapping) AOI already fetched can be reused here —
+            # no request, no provider-quota hit. Freshly fetched tiles are
+            # published to this dir below; a known-empty tile leaves a sentinel so
+            # it isn't re-requested. WMS/local sources return None (kept per-job).
+            shared_dir = shared_source_dir(self.work_dir, self._source,
+                                           self._params, self._opts)
+            if shared_dir and pending:
+                reused, kept = 0, deque()
+                for item in pending:
+                    tid, tile = item[0], item[1]
+                    rel = self._source.shared_rel_path(tile)
+                    if rel is None:            # legacy tile: fetch it per-job
+                        kept.append(item)
+                        continue
+                    sp = os.path.join(shared_dir, rel)
+                    if os.path.exists(sp):
+                        queue.mark_done(tid, sp); reused += 1
+                    elif os.path.exists(sp + SHARED_EMPTY_SUFFIX):
+                        queue.mark_done(tid, None); reused += 1
+                    else:
+                        kept.append(item)
+                if reused:
+                    pending = kept
+                    done_count += reused
+                    logger.info("Reused %d tile(s) from the shared cache; "
+                                "%d left to fetch.", reused, len(pending))
+
             # Collapse repeated error messages: log a given error in full the
             # first time, then just a one-line "(repeat ×N)" — a broken provider
             # can otherwise spam thousands of identical multi-line exceptions.
@@ -820,6 +927,8 @@ class BasemapTileDownloadTask(QgsTask):
             # Circuit breaker: back-pressure failures in a row with no success.
             # Reset by any successful tile; trips at MAX_CONSECUTIVE_BACKPRESSURE.
             consecutive_bp = 0
+            # Coarse progress for the Message Log: the next 10% mark still to log.
+            next_log_pct = 10
             logger.info("%s with concurrency=%d (back-off cap %.0fs, give up "
                         "after %s consecutive failures)", self._t_ing, self._concurrency,
                         self._backoff_cap,
@@ -852,7 +961,26 @@ class BasemapTileDownloadTask(QgsTask):
 
                         if outcome in ("ok", "empty"):
                             throttle.on_success()
-                            queue.mark_done(tid, path)
+                            store_path = path
+                            rel = (self._source.shared_rel_path(tile)
+                                   if shared_dir is not None else None)
+                            if rel is not None:
+                                # Publish to the shared cache so overlapping AOIs
+                                # reuse this tile. Move (atomic on the same
+                                # filesystem) rather than copy; a known-empty tile
+                                # leaves a zero-byte sentinel. (rel is None for a
+                                # legacy tile without col/row — kept per-job.)
+                                sp = os.path.join(shared_dir, rel)
+                                try:
+                                    os.makedirs(os.path.dirname(sp), exist_ok=True)
+                                    if outcome == "ok" and path:
+                                        os.replace(path, sp)
+                                        store_path = sp
+                                    elif outcome == "empty":
+                                        open(sp + SHARED_EMPTY_SUFFIX, "a").close()
+                                except OSError:
+                                    store_path = path   # fall back to per-job file
+                            queue.mark_done(tid, store_path)
                             done_count += 1
                             consecutive_bp = 0     # a success resets the circuit breaker
                             # DEBUG (file log only): one line per tile would flood
@@ -932,9 +1060,18 @@ class BasemapTileDownloadTask(QgsTask):
                                 "remaining tiles and building a partial mosaic from "
                                 "the %d downloaded so far; re-run later to fill the "
                                 "gaps.", consecutive_bp, throttle.status(), done_count)
-                        if processed % 25 == 0:
-                            logger.info("Checkpoint %d/%d (done=%d, failed=%d)",
-                                        done_n, total, done_count, failed_count)
+                        # Coarse progress readout. The Message Log is append-only,
+                        # so it can't grow a line in place; instead, each time the
+                        # run crosses another 10% we log the dotted bar so far
+                        # (0...10...20...100 over the whole job).
+                        pct = int(100 * done_n / total) if total else 100
+                        if pct >= next_log_pct:
+                            reached = pct - pct % 10        # highest 10% mark hit
+                            bar = "...".join(str(d) for d in range(0, reached + 1, 10))
+                            logger.info("Progress %s  (%d/%d tiles%s)", bar, done_n,
+                                        total, ", %d failed" % failed_count
+                                        if failed_count else "")
+                            next_log_pct = reached + 10
 
             # The fetch phase is over (drained, cancelled, or circuit-broken).
             # Bump progress to 100% now so the task bar doesn't sit frozen at the
@@ -1157,48 +1294,14 @@ def run(layer=None, extent=None, extent_crs=None, opts=None, out_crs=None,
     task = BasemapTileDownloadTask(source, layer, extent_wkt, extent_crs, params, opts,
                                    native, out_crs, output_path, resample, clip,
                                    conc, attempts, mind, cap, giveup,
-                                   cache_key=ckey, on_mosaic_start=on_mosaic_start)
-
-    def _finished(success):
-        release_logger()
-        loaded = False
-        tif = task.result_tif_path
-        # Load the mosaic whenever one was produced — including a partial mosaic
-        # from a cancelled run (taskTerminated), so the user can see the gaps.
-        if tif and os.path.exists(tif):
-            layer_name = os.path.splitext(os.path.basename(tif))[0].replace("_", " ")
-            lyr = QgsRasterLayer(tif, layer_name)
-            if lyr.isValid():
-                QgsProject.instance().addMapLayer(lyr)
-                loaded = True
-                print(f"[Basemap Tile Downloader] Mosaic loaded: {tif}")
-            else:
-                msg = f"Mosaic file invalid: {tif}"
-                print(f"[Basemap Tile Downloader] WARNING: {msg}")
-                QgsMessageLog.logMessage(msg, LOG_TAB, Qgis.Critical)
-        elif not success and not task.was_cancelled:
-            msg = str(task.exception) if task.exception else "Task failed."
-            print(f"[Basemap Tile Downloader] FAILED: {msg}")
-            QgsMessageLog.logMessage(f"Task failed: {msg}", LOG_TAB, Qgis.Critical)
-
-        if callable(on_finished):
-            try:
-                on_finished({
-                    "success":   bool(success),
-                    "loaded":    loaded,
-                    "cancelled": bool(task.was_cancelled),
-                    "server_gave_up": bool(task.server_gave_up),
-                    "local":     bool(getattr(task, "_local", False)),
-                    "tif":       tif,
-                    "summary":   task.summary or {},
-                    "error":     (str(task.exception)
-                                  if (not success and task.exception) else None),
-                })
-            except Exception:
-                pass
-
-    task.taskCompleted.connect(lambda: _finished(True))
-    task.taskTerminated.connect(lambda: _finished(False))
+                                   cache_key=ckey, on_mosaic_start=on_mosaic_start,
+                                   on_finished=on_finished)
+    # Completion is handled by the task's finished() hook (main thread, prompt for
+    # success/failure/cancel) rather than the manager's taskCompleted/
+    # taskTerminated signals, whose terminated delivery lagged a cancel by an
+    # event-loop turn (the message only appeared on the next run). Keep a strong
+    # Python reference until finished() runs, or the task is GC'd before it starts.
+    _ACTIVE_TASKS.add(task)
     QgsApplication.taskManager().addTask(task)
     print("[Basemap Tile Downloader] Task queued. Watch the Task Manager panel and "
           f"{os.path.join(task.work_dir, 'download.log')}")

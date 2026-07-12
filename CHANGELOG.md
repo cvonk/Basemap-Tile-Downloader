@@ -5,6 +5,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-07-12
+### Added
+- **Shared tile cache across jobs.** Overlapping areas now reuse each other's
+  tiles (XYZ, WMTS and WMS) from `__btdcache__/shared/<source>/`, skipping both
+  the repeat request and the provider-quota hit. Tiles are keyed by a global
+  identity (`{z}/{x}/{y}` for XYZ, matrix/col/row for WMTS, origin-anchored
+  col/row for WMS) and by source, so different providers or settings never mix.
+  A fetched tile is published to the shared store; a known-empty tile leaves a
+  sentinel so it isn't re-requested. Delete the `shared/` folder to clear it.
+- A growing progress bar in the **Message Log** panel: `Progress 0...10...20...100`,
+  one line per 10% — bounded so a large run can't flood the panel (replaces the
+  every-25-tiles "Checkpoint" line).
+
+### Changed
+- **WMS** GetMap tiles are now anchored to the CRS origin instead of each area's
+  corner, so overlapping WMS exports share a pixel grid (a prerequisite for the
+  shared cache). The exact-extent crop still trims the mosaic, so the output size
+  is unchanged. A resumed pre-1.7.0 WMS job keeps its existing extent-anchored
+  tiles (per-job, not shared) and is **not** re-downloaded.
+
+### Fixed
+- A download could be **garbage-collected before it started** and silently do
+  nothing — no tiles, no mosaic, no progress bar. The task is now kept alive
+  until it finishes. (Regression from the completion-message fix below.)
+- The completion/cancel message now appears **immediately** instead of only on
+  the next run: completion is handled by the task's `finished()` hook rather than
+  the task manager's `taskTerminated` signal, whose delivery lagged by an
+  event-loop turn.
+- Resuming a **pre-1.7.0 WMS** job no longer errors with `KeyError: 'col'`; those
+  older tiles lack the new grid keys and now fall back to per-job storage.
+
 ## [1.6.0] - 2026-07-10
 ### Removed
 - The "polite mode" macro-cell features: the **Stop after (tiles this run)** and

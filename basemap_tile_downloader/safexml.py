@@ -20,7 +20,10 @@ the namespace by splitting on "}") keep working unchanged.
 """
 
 import xml.parsers.expat as _expat
-from xml.etree.ElementTree import TreeBuilder, ParseError
+# TreeBuilder only assembles nodes from the (hardened) expat parser's callbacks;
+# entity definitions are rejected and external entities are never resolved (see
+# fromstring below), so this is NOT the vulnerable ElementTree parsing path.
+from xml.etree.ElementTree import TreeBuilder, ParseError  # nosec B405
 
 
 def _qname(name):

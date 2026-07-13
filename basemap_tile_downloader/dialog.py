@@ -11,7 +11,7 @@ rasters, zoom level for XYZ/WMTS.
 import configparser
 import math
 import os
-import subprocess
+import subprocess  # nosec B404
 
 from qgis.PyQt.QtWidgets import (
     QDialog, QFormLayout, QVBoxLayout, QHBoxLayout, QDialogButtonBox,
@@ -62,7 +62,10 @@ def _git_short_hash():
     """Short commit hash if the plugin is running from a git checkout (dev), else
     "". An installed plugin has no .git, so this is normally empty."""
     try:
-        out = subprocess.run(
+        # Fixed argument list, no shell, no user input; "git" is intentionally
+        # resolved via PATH (its location varies by platform/install). Dev-only:
+        # an installed plugin has no .git, so this simply returns "".
+        out = subprocess.run(  # nosec B603 B607
             ["git", "-C", _PLUGIN_DIR, "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=2,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -360,7 +363,7 @@ class BasemapTileDialog(QDialog):
                     nres = params.get("native_res")
                     if nres and self.res_spin.minimum() <= nres <= self.res_spin.maximum():
                         self.res_spin.setValue(nres)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             self.conc_spin.setValue(getattr(src, "CONCURRENCY", DEFAULT_CONCURRENCY))
         self._last_source = name
@@ -378,7 +381,7 @@ class BasemapTileDialog(QDialog):
                 zmin, zmax = int(p.get("zmin", 0)), int(p.get("zmax", 22))
                 if zmin <= zmax:
                     lo, hi = zmin, zmax
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         if (lo, hi) != (self.zoom_spin.minimum(), self.zoom_spin.maximum()):
             self.zoom_spin.setRange(lo, hi)
@@ -593,7 +596,7 @@ class BasemapTileDialog(QDialog):
                                 f"ALL of them, so a stray or unwanted feature can "
                                 f"enlarge it unexpectedly (e.g. a vertex near 0,0 "
                                 f"drops the South to 0). Use this extent anyway?")
-        except Exception:
+        except Exception:  # nosec B110
             pass
         return None
 

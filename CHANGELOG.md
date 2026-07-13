@@ -5,6 +5,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-07-13
+### Added
+- A **live per-tile counter** in the message bar during a run
+  (`Downloading tiles… 1,234 / 2,025 (61%) · ~7.0s/tile`), updated in place so it
+  never adds log lines. Wording adapts ("Reading" for a local raster).
+
+### Removed
+- The 10% `Progress 0…10…20…100` log line, superseded by the per-tile counter.
+  Per-tile detail is still written to `download.log` (DEBUG).
+
+### Fixed
+- Throttle log lines now append `(floor N.NNs in effect)` when the **Minimum
+  delay** is higher than the adaptive value, so they no longer look like the pace
+  dropped below the configured minimum (the real pace was always ≥ the floor).
+
+### Security
+- Cleared all bandit findings with scoped `# nosec` markers — hardened-XML
+  imports (parsing already goes through the entity-safe `safexml`), the dev-only
+  `git` call (fixed args, no shell), and best-effort `try/except/pass` guards —
+  and tightened CI to run the full bandit scan (all severities), matching the
+  QGIS Plugin Repository check.
+
 ## [1.7.0] - 2026-07-12
 ### Added
 - **Shared tile cache across jobs.** Overlapping areas now reuse each other's

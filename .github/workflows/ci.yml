@@ -28,10 +28,11 @@ jobs:
         run: flake8 basemap_tile_downloader tests
 
       - name: Security analysis (bandit)
-        # Gate on medium+ severity (what the QGIS Plugin Repository flags too).
-        # Remaining low-severity notes (subprocess to read the git hash, best-
-        # effort try/except/pass, hardened-XML imports) are intentional.
-        run: bandit -r basemap_tile_downloader -q --severity-level medium
+        # Full scan (all severities), matching the QGIS Plugin Repository check.
+        # The intentional low-severity notes (subprocess to read the git hash,
+        # best-effort try/except/pass, hardened-XML imports) carry scoped
+        # `# nosec BXXX` markers, so this stays green while catching new findings.
+        run: bandit -r basemap_tile_downloader -q
 
       - name: Secrets detection (detect-secrets)
         run: |

@@ -131,7 +131,7 @@ def source_for(layer):
         try:
             if mod.detect(layer):
                 return mod
-        except Exception:
+        except Exception:  # nosec B110
             pass
     return None
 
@@ -162,7 +162,7 @@ def build_logger(work_dir):
                    logging.CRITICAL: Qgis.Critical}.get(record.levelno, Qgis.Info)
             try:
                 QgsMessageLog.logMessage(self.format(record), LOG_TAB, lvl)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
     qh = _QH(); qh.setLevel(logging.INFO)
@@ -176,7 +176,7 @@ def release_logger():
     log = logging.getLogger("basemap_tile_downloader")
     for h in list(log.handlers):
         try: h.flush(); h.close()
-        except Exception: pass
+        except Exception: pass  # nosec B110
         log.removeHandler(h)
 
 
@@ -268,7 +268,7 @@ def georeference(body, out_tif, bounds, srs):
     finally:
         ds = None
         try: gdal.Unlink(mem)
-        except Exception: pass
+        except Exception: pass  # nosec B110
 
 
 # ─────────────────────────────────────────────
@@ -289,6 +289,12 @@ class AdaptiveThrottle:
             return f"{base:.2f}s + {self._extra:.1f}s one-shot"
         return f"{base:.2f}s"
 
+    def _floor_note(self, new):
+        """When the user's minimum delay is above the adaptive value, the real
+        pace is the floor, not `new` — say so, so the Throttle line isn't misread
+        as pacing below the configured minimum."""
+        return f" (floor {self._min:.2f}s in effect)" if self._min > new else ""
+
     def wait(self, cancel_check=None):
         # Never pace faster than the user's minimum delay (default 0 = no floor).
         rem = max(self._min, self._d) + self._extra   # + any one-shot Retry-After
@@ -303,12 +309,14 @@ class AdaptiveThrottle:
         if self._ok >= SUCCESSES_BEFORE_SPEEDUP:
             new = max(MIN_DELAY_SEC, self._d * SPEEDUP_FACTOR)
             if new != self._d:
-                self._log.debug("Throttle ↑ %.3f→%.3f", self._d, new)
+                self._log.debug("Throttle ↑ %.3f→%.3f%s", self._d, new,
+                                self._floor_note(new))
             self._d, self._ok = new, 0
 
     def _slow(self, new, reason):
         self._ok = 0
-        self._log.warning("Throttle ↓ %.3f→%.3f (%s)", self._d, new, reason)
+        self._log.warning("Throttle ↓ %.3f→%.3f (%s)%s", self._d, new, reason,
+                          self._floor_note(new))
         self._d = new
 
     def on_throttle(self, retry_after=None, reason="rate-limit"):
@@ -321,8 +329,8 @@ class AdaptiveThrottle:
             # instead of decaying down from the full Retry-After value.
             self._extra = max(self._extra, min(RETRY_AFTER_MAX_SEC, retry_after))
             self._ok = 0
-            self._log.warning("Throttle ↓ %.3f→%.3f + one-shot %.1fs (server Retry-After)",
-                              self._d, new, self._extra)
+            self._log.warning("Throttle ↓ %.3f→%.3f + one-shot %.1fs (server Retry-After)%s",
+                              self._d, new, self._extra, self._floor_note(new))
             self._d = new
         else:
             self._slow(new, reason)
@@ -369,7 +377,7 @@ class TileQueue:
                 "SELECT value FROM job_meta WHERE key='fingerprint'").fetchone()
             if row:
                 stored_fp = json.loads(row[0])
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         current_fp = meta.get("fingerprint")
@@ -471,7 +479,7 @@ class TileQueue:
 
     def close(self):
         try: self._c.close()
-        except Exception: pass
+        except Exception: pass  # nosec B110
 
 
 # ─────────────────────────────────────────────
@@ -704,13 +712,18 @@ class BasemapTileDownloadTask(QgsTask):
     # so it is delivered as a queued signal on the main thread — letting the UI
     # flash a message while the progress bar already sits at 100%.
     mosaicStarted = pyqtSignal()
+    # Emitted (worker thread, throttled) after each tile resolves, carrying
+    # (resolved, total) so the UI can show a live per-tile counter. Queued to the
+    # main thread like mosaicStarted.
+    tileProgress = pyqtSignal(int, int)
 
     def __init__(self, source, layer, extent_wkt, extent_crs, params, opts,
                  native_crs, out_crs, output_path=None, resample="bilinear",
                  clip=False, concurrency=CONCURRENCY,
                  max_attempts=MAX_ATTEMPTS_PER_TILE, min_delay=0.0,
                  backoff_cap=MAX_DELAY_SEC, giveup_after=MAX_CONSECUTIVE_BACKPRESSURE,
-                 cache_key=None, on_mosaic_start=None, on_finished=None):
+                 cache_key=None, on_mosaic_start=None, on_finished=None,
+                 on_tile_progress=None):
         # Silent: suppress QGIS's own task-finished/terminated notifications — the
         # plugin posts its own completion (and error) messages, so QGIS's generic
         # one is just noise, especially after a failure. (Silent needs QGIS 3.26+;
@@ -762,9 +775,11 @@ class BasemapTileDownloadTask(QgsTask):
 
         # Connect on the main thread (where the task is built) to a bound method,
         # so emitting from the worker thread is auto-delivered as a queued signal.
-        self._on_mosaic_start = on_mosaic_start
-        self._on_finished     = on_finished
+        self._on_mosaic_start   = on_mosaic_start
+        self._on_finished       = on_finished
+        self._on_tile_progress  = on_tile_progress
         self.mosaicStarted.connect(self._handle_mosaic_started)
+        self.tileProgress.connect(self._handle_tile_progress)
 
     def _handle_mosaic_started(self):
         # Runs on the main thread; best-effort UI callback (a message-bar flash).
@@ -772,7 +787,15 @@ class BasemapTileDownloadTask(QgsTask):
         if callable(self._on_mosaic_start):
             try:
                 self._on_mosaic_start()
-            except Exception:
+            except Exception:  # nosec B110
+                pass
+
+    def _handle_tile_progress(self, done, total):
+        # Runs on the main thread; best-effort live per-tile counter update.
+        if callable(self._on_tile_progress):
+            try:
+                self._on_tile_progress(done, total)
+            except Exception:  # nosec B110
                 pass
 
     def run(self):
@@ -828,7 +851,7 @@ class BasemapTileDownloadTask(QgsTask):
                     "error":     (str(self.exception)
                                   if (not result and self.exception) else None),
                 })
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
     def _run_impl(self):
@@ -927,8 +950,8 @@ class BasemapTileDownloadTask(QgsTask):
             # Circuit breaker: back-pressure failures in a row with no success.
             # Reset by any successful tile; trips at MAX_CONSECUTIVE_BACKPRESSURE.
             consecutive_bp = 0
-            # Coarse progress for the Message Log: the next 10% mark still to log.
-            next_log_pct = 10
+            # Throttle for the live per-tile counter emitted to the UI.
+            last_prog_emit = 0.0
             logger.info("%s with concurrency=%d (back-off cap %.0fs, give up "
                         "after %s consecutive failures)", self._t_ing, self._concurrency,
                         self._backoff_cap,
@@ -1048,6 +1071,13 @@ class BasemapTileDownloadTask(QgsTask):
                         processed += 1
                         done_n = done_count + failed_count
                         self.setProgress(100.0 * done_n / total if total else 100.0)
+                        # Live per-tile counter in the message bar. Throttled so a
+                        # fast source can't flood the UI event loop; the final tile
+                        # always emits so the count lands exactly on the total.
+                        now = time.monotonic()
+                        if done_n >= total or now - last_prog_emit >= 0.15:
+                            self.tileProgress.emit(done_n, total)
+                            last_prog_emit = now
 
                         # Circuit breaker: server has refused every request for a
                         # long stretch — stop grinding and build what we have.
@@ -1060,18 +1090,6 @@ class BasemapTileDownloadTask(QgsTask):
                                 "remaining tiles and building a partial mosaic from "
                                 "the %d downloaded so far; re-run later to fill the "
                                 "gaps.", consecutive_bp, throttle.status(), done_count)
-                        # Coarse progress readout. The Message Log is append-only,
-                        # so it can't grow a line in place; instead, each time the
-                        # run crosses another 10% we log the dotted bar so far
-                        # (0...10...20...100 over the whole job).
-                        pct = int(100 * done_n / total) if total else 100
-                        if pct >= next_log_pct:
-                            reached = pct - pct % 10        # highest 10% mark hit
-                            bar = "...".join(str(d) for d in range(0, reached + 1, 10))
-                            logger.info("Progress %s  (%d/%d tiles%s)", bar, done_n,
-                                        total, ", %d failed" % failed_count
-                                        if failed_count else "")
-                            next_log_pct = reached + 10
 
             # The fetch phase is over (drained, cancelled, or circuit-broken).
             # Bump progress to 100% now so the task bar doesn't sit frozen at the
@@ -1220,7 +1238,7 @@ def run(layer=None, extent=None, extent_crs=None, opts=None, out_crs=None,
         output_path=None, temporary=False, resample="bilinear", clip=False,
         concurrency=None, max_attempts=None, min_delay=None,
         backoff_cap=None, giveup_after=None,
-        on_finished=None, on_mosaic_start=None):
+        on_finished=None, on_mosaic_start=None, on_tile_progress=None):
     """
     Start a download task. The source backend (WMS / XYZ) is auto-detected from
     `layer`. `opts` is the source-specific settings dict
@@ -1295,7 +1313,7 @@ def run(layer=None, extent=None, extent_crs=None, opts=None, out_crs=None,
                                    native, out_crs, output_path, resample, clip,
                                    conc, attempts, mind, cap, giveup,
                                    cache_key=ckey, on_mosaic_start=on_mosaic_start,
-                                   on_finished=on_finished)
+                                   on_finished=on_finished, on_tile_progress=on_tile_progress)
     # Completion is handled by the task's finished() hook (main thread, prompt for
     # success/failure/cancel) rather than the manager's taskCompleted/
     # taskTerminated signals, whose terminated delivery lagged a cancel by an

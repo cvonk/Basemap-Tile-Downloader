@@ -9,7 +9,9 @@ KVP GetTile requests.
 """
 
 import math, urllib.parse
-import xml.etree.ElementTree as ET
+# Used only for ET.ParseError; all untrusted XML from the server is parsed by the
+# hardened safexml module (entities disabled), never by ElementTree.
+import xml.etree.ElementTree as ET  # nosec B405
 
 from qgis.core import (
     QgsProject, QgsRectangle, QgsGeometry, QgsCoordinateReferenceSystem,

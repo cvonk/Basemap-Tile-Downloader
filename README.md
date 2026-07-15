@@ -165,10 +165,12 @@ Notes:
     sooner (more aggressive); raise it to be gentler.
   - **Give up after (server errors in a row)** (default 30) — stop the run when
     this many requests in a row fail with no success (a server refusing a block
-    of tiles), then build a partial mosaic from what downloaded and leave the
-    rest for a re-run. Set it to 0 (“Never”) to keep only the per-tile limit.
-- If you **cancel** a run, the mosaic is still built from whatever downloaded so
-  far (with gaps where tiles are missing), and re-running fills in the rest.
+    of tiles), keep what downloaded in the queue, and leave the rest for a re-run.
+    Set it to 0 (“Never”) to keep only the per-tile limit.
+- The mosaic is built **only when every tile is downloaded**. If you **cancel** a
+  run, the server stops it early, or some tiles fail, no mosaic is produced —
+  progress is checkpointed and **re-running continues** where it left off; the
+  mosaic is built once the last tile lands.
 
 Click **OK** to start. Progress is shown in the Task Manager, the live run log
 opens in the **Log Messages** panel (the *Basemap Tile Downloader* tab), and the
@@ -213,9 +215,11 @@ doesn't waste requests (or a quota tile) re-confirming known gaps.
 
 If a server refuses a whole block of tiles and keeps failing every request, the
 run **stops early** rather than grinding for hours (“Server unavailable — stopped
-early…”): it builds a partial mosaic from what downloaded and leaves the rest to
-a re-run. You can tune when this kicks in with **Give up after** / **Back-off
-cap** in the Advanced section (see above).
+early…”) and defers the mosaic; what downloaded stays in the queue for a re-run.
+You can tune when this kicks in with **Give up after** / **Back-off cap** in the
+Advanced section (see above). Note the mosaic is only built once **every** tile is
+present, so an interrupted or partially-failed run produces no output until you
+re-run and it completes.
 
 If the *same* tiles keep failing no matter how often you re-run, open
 `download.log` (each export gets its own subfolder under `__btdcache__/`, next to

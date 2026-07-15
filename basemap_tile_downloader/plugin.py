@@ -138,39 +138,32 @@ class BasemapTileDownloaderPlugin:
                         "(this can take a moment)…")
 
     def _on_run_finished(self, result):
-        """Post a completion summary to the message bar (runs on the main thread)."""
-        self._clear_progress()          # safety net (e.g. cancel before any mosaic)
+        """Post a completion summary to the message bar (runs on the main thread).
+        The mosaic is built only when every tile is present, so a loaded result is
+        always complete; an incomplete run defers the mosaic and asks for a re-run."""
+        self._clear_progress()
         bar = self.iface.messageBar()
         s = result.get("summary") or {}
         total, done = s.get("total", 0), s.get("done", 0)
+        failed = s.get("failed", 0)
         missing = max(0, total - done)      # failed + not-yet-fetched (cancelled)
         cancelled = result.get("cancelled")
         server_gave_up = result.get("server_gave_up")
-        local = result.get("local")     # local raster: read/export, not download
+        past = "read" if result.get("local") else "downloaded"
 
         if result.get("loaded"):
-            if cancelled:
-                bar.pushWarning(
-                    MENU_TITLE,
-                    f"Cancelled — partial mosaic loaded ({done} of {total} tiles, "
-                    f"{missing} missing). Re-run to fill the gaps.")
-            elif server_gave_up:
-                bar.pushWarning(
-                    MENU_TITLE,
-                    f"Server unavailable — stopped early; partial mosaic loaded "
-                    f"({done} of {total} tiles, {missing} missing). Re-run later to "
-                    f"fill the gaps.")
-            elif missing:
-                bar.pushWarning(
-                    MENU_TITLE,
-                    f"Mosaic loaded — {done} of {total} tiles ({missing} missing) — "
-                    f"see download.log.")
-            else:
-                bar.pushMessage(
-                    MENU_TITLE, f"Mosaic loaded — {done} tiles.", level=Qgis.Success)
-        elif cancelled:
-            bar.pushInfo(MENU_TITLE,
-                         f"Cancelled before any tiles were {'read' if local else 'downloaded'}.")
+            bar.pushMessage(
+                MENU_TITLE, f"Mosaic loaded — {done} tiles.", level=Qgis.Success)
+        elif result.get("error"):
+            bar.pushCritical(MENU_TITLE, result.get("error"))
+        elif missing == 0:                  # complete, but every tile was empty
+            bar.pushInfo(MENU_TITLE, f"All {total} tiles are empty — no data to mosaic.")
         else:
-            bar.pushCritical(MENU_TITLE,
-                             result.get("error") or f"{'Export' if local else 'Download'} failed.")
+            # Incomplete: the mosaic is deferred until every tile is present.
+            reason = ("Cancelled" if cancelled else
+                      "Server unavailable — stopped early" if server_gave_up else
+                      f"{failed} tile(s) failed" if failed else "Incomplete")
+            bar.pushWarning(
+                MENU_TITLE,
+                f"{reason} — {done} of {total} tiles {past} ({missing} to go). "
+                f"Re-run to continue; the mosaic is built once all tiles are ready.")

@@ -1086,10 +1086,11 @@ class BasemapTileDownloadTask(QgsTask):
                             self.server_gave_up = True
                             logger.error(
                                 "Server persistently failing: %d requests in a row "
-                                "with no success (pacing at %s). Giving up on the "
-                                "remaining tiles and building a partial mosaic from "
-                                "the %d downloaded so far; re-run later to fill the "
-                                "gaps.", consecutive_bp, throttle.status(), done_count)
+                                "with no success (pacing at %s); %d downloaded so "
+                                "far. Giving up for now — re-run later to finish "
+                                "(the mosaic is built once every tile is "
+                                "downloaded).",
+                                consecutive_bp, throttle.status(), done_count)
 
             # The fetch phase is over (drained, cancelled, or circuit-broken).
             # Bump progress to 100% now so the task bar doesn't sit frozen at the
@@ -1097,8 +1098,10 @@ class BasemapTileDownloadTask(QgsTask):
             # which reports no progress of its own and can take a while.
             self.setProgress(100.0)
 
-            # Always mosaic what we have — even on cancel — so the gaps show which
-            # tiles are missing. Only bail if there is literally nothing to build.
+            # Build the mosaic only once EVERY tile is downloaded. An interrupted
+            # run (cancel or server give-up) or one with failed/pending tiles
+            # leaves the queue checkpointed and defers the mosaic — re-run to
+            # continue, and it builds when the last tile lands.
             cancelled = self.isCanceled()
             self.was_cancelled = cancelled
 
@@ -1109,41 +1112,42 @@ class BasemapTileDownloadTask(QgsTask):
             self.summary = {"total": total, "done": n_done, "failed": n_failed,
                             "cancelled": cancelled,
                             "server_gave_up": self.server_gave_up}
-            if cancelled:
-                logger.warning(
-                    "Cancelled at %d/%d tiles — building a partial mosaic from what "
-                    "%s so far (queue checkpointed in %s; re-run to continue).",
-                    n_done, total, self._t_past, db_path)
-            elif self.server_gave_up:
-                logger.warning(
-                    "Stopped early (server unavailable): %d of %d tiles downloaded, "
-                    "%d still pending. Building a partial mosaic; re-run later to "
-                    "fetch the rest (queue checkpointed in %s).",
-                    n_done, total, n_pending, db_path)
-            elif n_failed:
-                logger.warning(
-                    "Queue drained: %d of %d tiles %s, %d failed after "
-                    "exhausting their retries. The mosaic will have gaps there; "
-                    "re-run with the same settings to retry only the failed tiles.",
-                    n_done, total, self._t_past, n_failed)
-            else:
-                logger.info("Queue drained: all %d tiles %s.", total, self._t_past)
             # Tally of distinct errors seen this run (most frequent first) so a
             # provider outage is one readable summary, not thousands of lines.
             for msg, n in sorted(err_seen.items(), key=lambda kv: -kv[1]):
                 logger.info("Error seen %d×: %s", n, _first_line(msg))
 
+            if n_done < total:                      # not every tile is downloaded
+                if cancelled:
+                    logger.warning(
+                        "Cancelled at %d/%d tiles %s — queue checkpointed in %s. "
+                        "Re-run to continue; the mosaic is built once every tile is "
+                        "downloaded.", n_done, total, self._t_past, db_path)
+                elif self.server_gave_up:
+                    logger.warning(
+                        "Stopped early (server unavailable): %d of %d tiles %s, %d "
+                        "still pending. Re-run later to finish; the mosaic is built "
+                        "once every tile is downloaded (queue checkpointed in %s).",
+                        n_done, total, self._t_past, n_pending, db_path)
+                else:
+                    logger.warning(
+                        "Queue drained but %d of %d tiles failed after exhausting "
+                        "their retries — deferring the mosaic. Re-run with the same "
+                        "settings to retry the failed tiles; the mosaic is built "
+                        "once every tile is downloaded.", n_failed, total)
+                return                              # no partial mosaic
+
+            logger.info("Queue drained: all %d tiles %s.", total, self._t_past)
             tile_paths = queue.done_file_paths()
             if not tile_paths:
-                if cancelled:
-                    logger.warning("Cancelled before any tile %s; nothing to mosaic.",
-                                   self._t_past)
-                    return
-                raise DownloaderError(f"No tiles {self._t_past}; cannot build mosaic.")
+                # Complete, but every tile came back empty (no data in this area) —
+                # nothing to build. Not an error; simply leave no output.
+                logger.warning("All %d tiles are empty; nothing to mosaic.", total)
+                return
 
-            # Fetch phase is done and there are tiles to mosaic; the progress bar
-            # is already pinned at 100%. Tell the UI the (progress-less) mosaic
-            # build is starting so it can reassure the user it's not stuck.
+            # Every tile is present; build the mosaic. The progress bar is already
+            # pinned at 100%; tell the UI the (progress-less) build is starting so
+            # it can reassure the user it isn't stuck.
             self.mosaicStarted.emit()
 
             cutline = self._build_cutline(extent_geom, logger) if self._clip else None

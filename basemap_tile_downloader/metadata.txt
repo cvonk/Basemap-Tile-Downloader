@@ -4,7 +4,7 @@ qgisMinimumVersion=3.40.8
 qgisMaximumVersion=4.99
 description=Download a WMS, WMTS, or XYZ basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.7.1
+version=1.8.0
 author=Coert Vonk
 email=ing.c.j.s.vonk@gmail.com
 license=GPL-3.0-or-later
@@ -16,7 +16,12 @@ experimental=False
 deprecated=False
 category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.7.1 - A live per-tile counter now shows in the message bar while
+changelog=1.8.0 - The mosaic is now built only when every tile is downloaded.
+    A cancelled run, a server that stops the run early, or one with failed tiles
+    no longer produces a partial mosaic with gaps; progress is checkpointed and
+    re-running continues where it left off, building the mosaic once the last tile
+    lands. Completion messages report how many tiles are left to go.
+    1.7.1 - A live per-tile counter now shows in the message bar while
     downloading (tiles done / total, percent and seconds-per-tile), updating in
     place; it replaces the 10 percent progress line in the log. Throttle log lines
     note when the minimum-delay floor is in effect, so they no longer look like

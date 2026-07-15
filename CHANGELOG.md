@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-07-14
+### Changed
+- **The mosaic is built only when every tile is downloaded.** Previously an
+  interrupted run always stitched a *partial* mosaic (with gaps) — on cancel,
+  when the server stopped the run early, or when some tiles failed. Now those
+  cases produce **no output**: progress is checkpointed and **re-running
+  continues** where it left off, building the mosaic once the last tile lands.
+  Completion messages report how many tiles remain (e.g. "Cancelled — 1,077 of
+  2,025 tiles downloaded (948 to go). Re-run to continue").
+
 ## [1.7.1] - 2026-07-13
 ### Added
 - A **live per-tile counter** in the message bar during a run

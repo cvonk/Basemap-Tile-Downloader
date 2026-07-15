@@ -9,9 +9,10 @@ the project) — over a chosen rectangular extent.
 This build:
 - Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source, or a
   local (GDAL) raster such as a GeoTIFF.
-- Tiles the request over the extent — WMS `GetMap` at a chosen resolution or zoom level.
+- Tiles the request over the extent — WMS `GetMap` at a chosen resolution, or XYZ/WMTS at a chosen zoom level.
 - Throttles requests adaptively (tuned per source type) and fetches tiles in parallel, with a configurable number of parallel downloads.
 - Tracks progress in a resumable SQLite queue (one per job, kept beside your project), so an interrupted run continues where it left off and a re-run retries any tiles that failed previously. A cache folder can also be moved or backed up and still resume.
+- Reuses tiles across overlapping jobs (XYZ/WMTS/WMS) from a shared cache, so a second area that overlaps an earlier one skips re-downloading the shared tiles — and the provider-quota hit.
 - Georeferences each tile and mosaics them into a compressed, tiled GeoTIFF (with overviews), optionally reprojected to a chosen output CRS and cropped to the exact extent, then loads it into the project.
 - Single-band rasters (e.g. a DTM) keep their nodata value instead of gaining an alpha band.
 
@@ -172,9 +173,11 @@ Notes:
   progress is checkpointed and **re-running continues** where it left off; the
   mosaic is built once the last tile lands.
 
-Click **OK** to start. Progress is shown in the Task Manager, the live run log
-opens in the **Log Messages** panel (the *Basemap Tile Downloader* tab), and the
-finished mosaic is added to the project automatically.
+Click **OK** to start. A live per-tile counter appears in the message bar (e.g.
+*Downloading tiles… 1,234 / 2,025 (61%) · ~7.0s/tile*), overall progress shows in
+the Task Manager, and the live run log opens in the **Log Messages** panel (the
+*Basemap Tile Downloader* tab). The finished mosaic is added to the project
+automatically.
 
 ## Q & A
 
@@ -203,15 +206,17 @@ Check that the resolution / zoom and the coordinate reference systems suit your
 source. For XYZ, requesting a zoom finer than the provider serves only
 interpolates — it adds no real detail.
 
-**Why are some tiles missing?**
+**A run didn't finish — some tiles failed. What now?**
 Tiles can fail from server-side rate-limiting/throttling or a transient server
-error (the completion message and `download.log` report how many failed).
-**Just run the export again with the same settings** — it keeps the tiles
-already downloaded and retries the failed ones, so the gaps fill in once the
-server cooperates. If a specific server keeps failing many parallel requests,
-lower **Parallel downloads** (to 1–2). For XYZ, `404`/`204` tiles are treated as
-legitimate gaps (no data at that tile), and a resume won't re-request them, so it
-doesn't waste requests (or a quota tile) re-confirming known gaps.
+error (the completion message and `download.log` report how many). The mosaic is
+built **only when every tile is present**, so a run with failures produces no
+output. **Just run the export again with the same settings** — it keeps the tiles
+already downloaded and retries the failed ones; once they all succeed the mosaic
+is built. If a specific server keeps failing many parallel requests, lower
+**Parallel downloads** (to 1–2). For XYZ, `404`/`204` tiles are *not* failures —
+they're legitimate empty tiles (no data there), counted as done and left as
+transparent areas in the finished mosaic; a resume won't re-request them, so it
+doesn't waste a quota tile re-confirming known gaps.
 
 If a server refuses a whole block of tiles and keeps failing every request, the
 run **stops early** rather than grinding for hours (“Server unavailable — stopped
@@ -242,14 +247,14 @@ across days: run until it stops, then **re-run the next day** and it continues
 where it left off (the resumable per-job cache picks up the pending tiles).
 
 **Can I move, back up, or restore the download cache?**
-Yes. Each export's progress lives in its own subfolder of `__btdcache__/` (next
-to your project, named after the output file): the SQLite queue plus a `tiles/`
-folder. The queue stores file paths *relative* to that subfolder, so you can
-move, copy, or restore the **whole subfolder** — queue and `tiles/` together — to
-another folder, drive, or machine, and a re-run with the same settings resumes
-without re-downloading. Just keep the queue and its `tiles/` folder as siblings.
-(Caches from before this feature stored absolute paths; those still work in place,
-but move them and their tiles will be re-fetched.)
+Yes — move the **whole `__btdcache__/` folder** (next to your project). It holds
+one subfolder per export (the SQLite queue) plus a shared `shared/` tile store
+that XYZ/WMTS/WMS jobs fetch into. Paths are stored *relative* to `__btdcache__/`,
+so you can move, copy, or restore the whole folder to another drive or machine and
+a re-run with the same settings resumes without re-downloading. Moving just a
+single job's subfolder isn't enough now that the tile images live in `shared/` —
+take the whole `__btdcache__/`. (Caches from before this feature stored absolute
+paths; those still work in place, but moving them re-fetches their tiles.)
 
 **I download overlapping areas — can it reuse tiles between them?**
 Yes, for **XYZ**, **WMTS** and **WMS** sources. Their tiles have a fixed global

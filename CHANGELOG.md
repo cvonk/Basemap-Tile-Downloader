@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.9.3] - 2026-07-18
+### Added
+- **The shared-cache signature is logged to the Message Log** at the start of the
+  fetch phase (`Shared-cache signature: <hash>`, the `…/shared/<hash>/` folder
+  name), so you can confirm two overlapping jobs share a cache. Sources with no
+  global tile identity (WMS / local raster) log that tiles are kept per-job.
+
+### Changed
+- **The live message-bar counter now shows estimated time remaining** instead of
+  the per-tile pace — e.g. `Downloading tiles… 40 / 96 (41%) · ~5m 36s left`. The
+  estimate uses the same post-baseline pace (only tiles fetched this run), so a
+  resume or shared-cache reuse doesn't skew it; it refines as the run proceeds.
+
 ## [1.9.2] - 2026-07-18
 ### Fixed
 - **The live “s/tile” counter read too low.** It divided the elapsed time by the

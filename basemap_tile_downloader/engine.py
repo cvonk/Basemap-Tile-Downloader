@@ -964,6 +964,13 @@ class BasemapTileDownloadTask(QgsTask):
             # it isn't re-requested. WMS/local sources return None (kept per-job).
             shared_dir = shared_source_dir(self.work_dir, self._source,
                                            self._params, self._opts)
+            # Surface the shared-cache signature (the …/shared/<sig>/ folder name)
+            # so overlapping jobs can be confirmed to share a cache. None for a
+            # source with no global tile identity (WMS/local) — kept per-job.
+            if shared_dir:
+                logger.info("Shared-cache signature: %s", os.path.basename(shared_dir))
+            else:
+                logger.info("Shared cache: none (tiles kept per-job for this source).")
             if shared_dir and pending:
                 reused, kept = 0, deque()
                 for item in pending:

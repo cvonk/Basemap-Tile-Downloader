@@ -19,6 +19,18 @@ from . import engine
 MENU_TITLE = "Basemap Tile Downloader"
 
 
+def _format_duration(seconds):
+    """Compact human duration for the live ETA: '45s', '3m 20s', '1h 05m'."""
+    secs = max(0, int(round(seconds)))
+    if secs < 60:
+        return f"{secs}s"
+    mins, secs = divmod(secs, 60)
+    if mins < 60:
+        return f"{mins}m {secs:02d}s" if secs else f"{mins}m"
+    hrs, mins = divmod(mins, 60)
+    return f"{hrs}h {mins:02d}m"
+
+
 class BasemapTileDownloaderPlugin:
     def __init__(self, iface):
         self.iface = iface
@@ -135,17 +147,18 @@ class BasemapTileDownloaderPlugin:
                 self._progress_start = time.monotonic()
                 # Baseline: tiles already resolved when this run's counter first
                 # appeared (resumed and shared-cache tiles cost ~no time now). The
-                # s/tile pace is measured only over tiles fetched *after* this
-                # point, so it reflects the real download rate — dividing the whole
-                # count by the elapsed time would dilute it toward zero and read
-                # well below the configured minimum delay.
+                # pace is measured only over tiles fetched *after* this point, so
+                # the ETA reflects the real download rate — including the whole
+                # count would dilute the pace toward zero and under-estimate it.
                 self._progress_done0 = done
             pct = int(100 * done / total) if total else 100
             txt = f"{self._progress_verb} tiles… {done:,} / {total:,} ({pct}%)"
             elapsed = time.monotonic() - self._progress_start
             fetched = done - self._progress_done0
-            if fetched > 0:
-                txt += f" · ~{elapsed / fetched:.1f}s/tile"
+            remaining = (total - done) if total else 0
+            if fetched > 0 and remaining > 0:
+                eta = remaining * (elapsed / fetched)
+                txt += f" · ~{_format_duration(eta)} left"
             self._progress_label.setText(txt)
         except Exception:  # nosec B110
             pass

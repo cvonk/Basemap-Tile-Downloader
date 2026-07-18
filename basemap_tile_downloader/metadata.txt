@@ -4,7 +4,7 @@ qgisMinimumVersion=3.40.8
 qgisMaximumVersion=4.99
 description=Download a WMS, WMTS, or XYZ basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.9.2
+version=1.9.3
 author=Coert Vonk
 email=ing.c.j.s.vonk@gmail.com
 license=GPL-3.0-or-later
@@ -16,7 +16,12 @@ experimental=False
 deprecated=False
 category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.9.2 - Fixed the live "s/tile" counter, which read too low: it
+changelog=1.9.3 - The live message-bar counter now shows estimated time
+    remaining (e.g. "~5m 36s left") instead of the per-tile pace, using the pace
+    of tiles fetched this run so a resume or shared-cache reuse doesn't skew it.
+    The shared-cache signature is now logged to the Message Log at the start of
+    the fetch phase, so overlapping jobs can be confirmed to share a cache.
+    1.9.2 - Fixed the live "s/tile" counter, which read too low: it
     divided the elapsed time by every resolved tile, including tiles restored
     from a resumed queue or the shared cache (which cost no time this run), so it
     showed roughly half the real pace on a fresh run and near zero on a resume.

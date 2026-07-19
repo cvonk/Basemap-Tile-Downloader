@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.10.3] - 2026-07-18
+### Added
+- **Harmonise: "Match brightness/contrast" strength** (Processing group, ArcGIS,
+  default 0%). Flight-year harmonise matches colour at the seam and keeps each
+  year's own brightness/contrast; this optional knob additionally pulls the
+  years' overall brightness/contrast together, blending the seam-local fit toward
+  a global match. 0% keeps today's behaviour; higher is more uniform but mutes
+  and can slightly re-expose the seam (try 30–50%). It only re-composites, so
+  changing it and re-running doesn't re-download.
+
+### Fixed
+- **Flake8 E741** in the ArcGIS backend: the ambiguous layer-loop variable `l`
+  is renamed `lyr`, clearing the QGIS Plugin Repository's code-quality check.
+
 ## [1.10.2] - 2026-07-18
 ### Fixed
 - **Qt6 / QGIS 4 enum-scoping warnings.** Several QGIS enums were used unscoped

@@ -39,6 +39,7 @@ DEFAULT_MAX_ATTEMPTS = 6
 DEFAULT_MIN_DELAY    = 0.0
 DEFAULT_CACHE_BUST   = False   # off: don't add the per-retry WMS cache-buster
 DEFAULT_HARMONIZE    = False   # off: don't harmonise ArcGIS flight years
+DEFAULT_HARMONIZE_MATCH = 0    # % brightness/contrast match on top of the colour match
 # Sourced from the engine so the dialog's defaults can't drift from the real ones.
 DEFAULT_BACKOFF_CAP  = engine.MAX_DELAY_SEC                # s; adaptive back-off ceiling
 DEFAULT_GIVEUP_AFTER = engine.MAX_CONSECUTIVE_BACKPRESSURE  # consecutive fails → give up
@@ -245,10 +246,28 @@ class BasemapTileDialog(QDialog):
             "to the newest along their shared boundary, then composite — removing "
             "the seam while keeping each year's own colours (no global muting).\n"
             "Only applies to ArcGIS sources whose layers are per-year orthophotos.")
+        # How strongly to also equalise brightness/contrast between years, on top
+        # of the seam colour match. 0 = colour only (default); enabled only when
+        # harmonise is on.
+        self.harmonize_match_spin = QSpinBox()
+        self.harmonize_match_spin.setRange(0, 100)
+        self.harmonize_match_spin.setSuffix(" %")
+        self.harmonize_match_spin.setToolTip(
+            "How strongly to also match brightness and contrast between flight "
+            "years, on top of the colour match at the seam.\n"
+            "0% (default): match colour only — each year keeps its own brightness "
+            "and contrast (richest result; the years may still differ in "
+            "brightness/contrast away from the seam).\n"
+            "Higher: pull the years' overall brightness/contrast together too — "
+            "more uniform, but high values mute the image and can slightly "
+            "re-expose the seam. Try 30–50%.")
+        self.harmonize_match_spin.setEnabled(False)
+        self.harmonize_check.toggled.connect(self.harmonize_match_spin.setEnabled)
         self.processing_group = QgsCollapsibleGroupBox("Processing")
         self.processing_group.setCollapsed(True)
         pform = QFormLayout(self.processing_group)
         pform.addRow("", self.harmonize_check)
+        pform.addRow("Match brightness/contrast:", self.harmonize_match_spin)
         form.addRow(self.processing_group)
 
         self.output_group = QgsCollapsibleGroupBox("Output")
@@ -577,6 +596,9 @@ class BasemapTileDialog(QDialog):
             s.value(f"{g}/cache_bust", DEFAULT_CACHE_BUST, type=bool))
         self.harmonize_check.setChecked(
             s.value(f"{g}/harmonize", DEFAULT_HARMONIZE, type=bool))
+        self.harmonize_match_spin.setValue(
+            int(s.value(f"{g}/harmonize_match", DEFAULT_HARMONIZE_MATCH)))
+        self.harmonize_match_spin.setEnabled(self.harmonize_check.isChecked())
 
         # Restore the last-used extent (overriding the default canvas extent that
         # setMapCanvas seeded). setOutputExtentFromUser fills the N/S/E/W fields.
@@ -613,6 +635,7 @@ class BasemapTileDialog(QDialog):
         s.setValue(f"{g}/giveup_after", self.giveup_spin.value())
         s.setValue(f"{g}/cache_bust", self.cache_bust_check.isChecked())
         s.setValue(f"{g}/harmonize", self.harmonize_check.isChecked())
+        s.setValue(f"{g}/harmonize_match", self.harmonize_match_spin.value())
         ly = self.layer_combo.currentLayer()
         s.setValue(f"{g}/layer_id", ly.id() if ly else "")
 
@@ -718,6 +741,7 @@ class BasemapTileDialog(QDialog):
                     "resolution":  self.res_spin.value()}
             if name == "ArcGIS":
                 opts["harmonize"] = self.harmonize_check.isChecked()
+                opts["harmonize_match"] = self.harmonize_match_spin.value() / 100.0
         elif name in ("XYZ", "WMTS"):
             opts = {"zoom": self.zoom_spin.value()}
         else:

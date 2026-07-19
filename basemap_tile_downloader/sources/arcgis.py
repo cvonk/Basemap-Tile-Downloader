@@ -125,13 +125,13 @@ def prepare(params, opts, logger):
     # Per-year layers: a group layer whose name carries a year, with an "Image"
     # child (…/Orthofotos 2024 → child "Image"). Map year → that Image layer id.
     layers = meta.get("layers") or []
-    by_id = {l["id"]: l for l in layers}
+    by_id = {lyr["id"]: lyr for lyr in layers}
     years = []
-    for l in layers:
-        m = _YEAR_RE.search(l.get("name", ""))
-        if not m or not l.get("subLayerIds"):
+    for lyr in layers:
+        m = _YEAR_RE.search(lyr.get("name", ""))
+        if not m or not lyr.get("subLayerIds"):
             continue
-        img = next((cid for cid in l["subLayerIds"]
+        img = next((cid for cid in lyr["subLayerIds"]
                     if by_id.get(cid, {}).get("name", "").lower().startswith("image")), None)
         if img is not None:
             years.append((int(m.group(0)), img))
@@ -320,6 +320,20 @@ def _seam_transform(rgb_ref, m_ref, rgb_oth, m_oth):
     return out, int(min(seam_o.sum(), seam_r.sum()))
 
 
+def _global_transform(rgb_ref, m_ref, rgb_oth, m_oth):
+    """Per-channel (gain, offset) matching the other year's *whole-region* stats
+    to the reference's — a global brightness/contrast alignment. Blended into the
+    seam-local fit by the 'match brightness/contrast' strength."""
+    out = []
+    for c in range(3):
+        ro, rr = rgb_oth[..., c][m_oth], rgb_ref[..., c][m_ref]
+        so = ro.std() or 1.0
+        g = min(2.0, max(0.5, (rr.std() or 1.0) / so))
+        o = rr.mean() - g * ro.mean()
+        out.append((g, o))
+    return out
+
+
 def compose_mosaic(done, work_dir, out_path, native_crs, out_crs,
                    resample, cutline, params, opts, logger):
     """Build a seam-harmonised mosaic from per-year tiles. `done` is a list of
@@ -332,6 +346,10 @@ def compose_mosaic(done, work_dir, out_path, native_crs, out_crs,
     years = sorted((y for y in by_year if y is not None), reverse=True)
     if not years:
         raise DownloaderError("Harmonise: no dated tiles to compose.")
+    # 0 = colour match at the seam only (keep each year's own brightness/contrast);
+    # →1 = also pull the years' overall brightness/contrast together (more uniform,
+    # but mutes and can slightly re-expose the seam).
+    strength = min(1.0, max(0.0, float(opts.get("harmonize_match", 0.0) or 0.0)))
 
     tmp = os.path.join(work_dir, "_harmonise")
     os.makedirs(tmp, exist_ok=True)
@@ -358,9 +376,15 @@ def compose_mosaic(done, work_dir, out_path, native_crs, out_crs,
             logger.info("Harmonise: year %d does not border the reference — left as-is.", y)
             gdal.Translate(adj, vrts[y], options=gdal.TranslateOptions(format="GTiff"))
         else:
+            if strength > 0:                      # blend toward a global brightness/contrast match
+                gg = _global_transform(reduced[ref][0], reduced[ref][1],
+                                       reduced[y][0], reduced[y][1])
+                gains = [((1 - strength) * gl + strength * ggl,
+                          (1 - strength) * ol + strength * ogl)
+                         for (gl, ol), (ggl, ogl) in zip(gains, gg)]
             sp = [[0, 255, o, o + 255 * g] for (g, o) in gains] + [[0, 255, 0, 255]]
-            logger.info("Harmonise: year %d → ref on %d seam px, gains=%s.",
-                        y, npx, [f"{g:.2f}+{o:.0f}" for g, o in gains])
+            logger.info("Harmonise: year %d → ref on %d seam px (match=%.0f%%), gains=%s.",
+                        y, npx, strength * 100, [f"{g:.2f}+{o:.0f}" for g, o in gains])
             gdal.Translate(adj, vrts[y], options=gdal.TranslateOptions(
                 format="GTiff", bandList=[1, 2, 3, 4], scaleParams=sp,
                 outputType=gdal.GDT_Byte))

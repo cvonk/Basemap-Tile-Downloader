@@ -4,7 +4,7 @@ qgisMinimumVersion=3.40.8
 qgisMaximumVersion=4.99
 description=Download a WMS, WMTS, XYZ, or ArcGIS REST basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, XYZ, or ArcGIS REST MapServer tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.10.2
+version=1.10.3
 author=Coert Vonk
 email=ing.c.j.s.vonk@gmail.com
 license=GPL-3.0-or-later
@@ -16,7 +16,12 @@ experimental=False
 deprecated=False
 category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.10.2 - Qt6 / QGIS 4 fix: several QGIS enums were used unscoped
+changelog=1.10.3 - Harmonise gains a "Match brightness/contrast" strength
+    (Processing group, ArcGIS; default 0 = today's colour-only behaviour): on top
+    of the seam colour match, it can pull the flight years' overall brightness and
+    contrast together, blending toward a global match. Also renamed an ambiguous
+    variable to clear a Flake8 E741 warning on the plugin repository.
+    1.10.2 - Qt6 / QGIS 4 fix: several QGIS enums were used unscoped
     (Qgis.Info, QgsTask.CanCancel, QgsMapLayerProxyModel.RasterLayer, etc.),
     which PyQt6 rejects and the QGIS Plugin Repository flags. They are now fully
     scoped (Qgis.MessageLevel.Info, QgsTask.Flag.CanCancel, ...), which also

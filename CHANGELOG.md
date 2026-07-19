@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.10.4] - 2026-07-18
+### Added
+- **ArcGIS tiles now use the shared cache.** Like XYZ/WMTS/WMS, ArcGIS `export`
+  tiles are keyed by a content signature (endpoint / CRS / format / tile-size /
+  resolution) plus a per-tile identity (layer / col / row), so they're reused
+  across jobs: **overlapping AOIs**, and **re-runs that only change the harmonise
+  “Match brightness/contrast” knob or the output file, no longer re-download**.
+  Each flight year is cached under its own layer folder, and a faithful
+  single-year download shares tiles with the harmonised run.
+
 ## [1.10.3] - 2026-07-18
 ### Added
 - **Harmonise: "Match brightness/contrast" strength** (Processing group, ArcGIS,

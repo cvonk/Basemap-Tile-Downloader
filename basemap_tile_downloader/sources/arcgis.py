@@ -275,6 +275,38 @@ def mosaic_hints(params, opts):
 
 
 # ─────────────────────────────────────────────
+# SHARED CACHE  (reusable across jobs / knob-tuning re-runs)
+# ─────────────────────────────────────────────
+# An export tile has a global identity (origin-anchored col/row for a given grid,
+# per requested layer), so overlapping AOIs — and re-runs that only change the
+# harmonise match strength or the output file — reuse tiles instead of
+# re-downloading. The per-tile layer id goes in the path (so the composite, a
+# single year, and a harmonised year's tiles don't collide but a faithful single
+# year and that same harmonised year *do* share, being identical requests).
+SHAREABLE = True
+
+
+def shared_signature(params, opts):
+    """Identity of the tile source/grid (everything but the tile's position and
+    which layer): endpoint, CRS, format, tile size and resolution."""
+    return "arcgis\n" + "\n".join([
+        params.get("url", ""), params.get("crs", ""), params.get("format", "png32"),
+        str(int(opts.get("tile_pixels", 1024))),
+        repr(float(opts.get("resolution", 0.5)))])
+
+
+def shared_rel_path(tile):
+    """Path under the shared dir: <layer>/<col>/<row>.tif. `layer` is the
+    per-tile layer id (a year's Image layer when harmonising, the selected
+    sublayer, or 'composite'). None if the tile predates col/row."""
+    if "col" not in tile or "row" not in tile:
+        return None
+    lid = tile.get("layer_id")
+    layer = str(lid) if lid not in (None, "") else "composite"
+    return "{}/{}/{}.tif".format(layer, tile["col"], tile["row"])
+
+
+# ─────────────────────────────────────────────
 # HARMONISE FLIGHT YEARS  (compose hook, called by the engine)
 # ─────────────────────────────────────────────
 _STATS_MAXDIM = 2200     # read each year at ≤ this for the seam statistics

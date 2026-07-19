@@ -4,7 +4,7 @@ qgisMinimumVersion=3.40.8
 qgisMaximumVersion=4.99
 description=Download a WMS, WMTS, or XYZ basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, or XYZ tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.9.4
+version=1.10.0
 author=Coert Vonk
 email=ing.c.j.s.vonk@gmail.com
 license=GPL-3.0-or-later
@@ -16,7 +16,14 @@ experimental=False
 deprecated=False
 category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.9.4 - Quieter Message Log: the extent-coordinate dump and the
+changelog=1.10.0 - New ArcGIS REST MapServer source type: point the plugin at an
+    ArcGIS Map Server layer and it downloads faithfully via the service's export
+    endpoint (tiled over the extent at a chosen resolution/CRS). New "Harmonise
+    flight years" option (a Processing group in the dialog) for ArcGIS orthophoto
+    services that mosaic several survey years: it downloads each year separately
+    and colour-matches the older years to the newest along their shared boundary,
+    removing the year-boundary seam without muting the colours.
+    1.9.4 - Quieter Message Log: the extent-coordinate dump and the
     fetch-settings line (concurrency / back-off cap / give-up) are now written to
     download.log only, not shown in the QGIS Message Log panel. The "building the
     GeoTIFF mosaic..." notice now stays in the canvas message bar for the whole

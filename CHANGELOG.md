@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.10.0] - 2026-07-18
+### Added
+- **ArcGIS REST MapServer source type.** Point the plugin at an ArcGIS Map Server
+  layer (added via QGIS's *ArcGIS REST Server* connection) and it downloads
+  faithfully through the service's `export` endpoint — tiled over the extent at
+  your chosen resolution/CRS, no colour change. Many government orthophotos are
+  ArcGIS-only. The service's native CRS and (for harmonising) its per-year layers
+  are discovered from the REST metadata.
+- **Harmonise flight years (ArcGIS).** A new collapsible **Processing** group in
+  the dialog (above *Output*, closed by default) with **Harmonise flight years**,
+  shown only for ArcGIS sources. ArcGIS orthophoto services often serve a mosaic
+  of different survey years with a visible colour seam where two years meet. When
+  on, the plugin downloads each year separately and colour-matches the older
+  years to the newest **along their shared boundary**, then composites — removing
+  the seam while keeping each year's own colours (a global balance would mute
+  them). GDAL + numpy only; off by default.
+
 ## [1.9.4] - 2026-07-18
 ### Changed
 - **Quieter Message Log.** The per-run diagnostics that dumped extent coordinates

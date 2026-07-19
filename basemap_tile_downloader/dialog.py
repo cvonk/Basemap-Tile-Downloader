@@ -38,6 +38,7 @@ DEFAULT_CONCURRENCY  = 4
 DEFAULT_MAX_ATTEMPTS = 6
 DEFAULT_MIN_DELAY    = 0.0
 DEFAULT_CACHE_BUST   = False   # off: don't add the per-retry WMS cache-buster
+DEFAULT_HARMONIZE    = False   # off: don't harmonise ArcGIS flight years
 # Sourced from the engine so the dialog's defaults can't drift from the real ones.
 DEFAULT_BACKOFF_CAP  = engine.MAX_DELAY_SEC                # s; adaptive back-off ceiling
 DEFAULT_GIVEUP_AFTER = engine.MAX_CONSECUTIVE_BACKPRESSURE  # consecutive fails → give up
@@ -234,6 +235,22 @@ class BasemapTileDialog(QDialog):
             "On: build the mosaic from whatever downloaded, leaving the missing "
             "tiles as transparent gaps. A later re-run (with this off) still "
             "fills them and rebuilds without gaps.")
+        # Processing (ArcGIS sources only): optional post-fetch steps. Collapsed by
+        # default, and sits just above Output.
+        self.harmonize_check = QCheckBox("Harmonise flight years (seamless colour)")
+        self.harmonize_check.setToolTip(
+            "ArcGIS orthophoto services often serve a mosaic of different survey "
+            "years, leaving a visible colour seam where two years meet.\n"
+            "On: download each year separately and colour-match the older years "
+            "to the newest along their shared boundary, then composite — removing "
+            "the seam while keeping each year's own colours (no global muting).\n"
+            "Only applies to ArcGIS sources whose layers are per-year orthophotos.")
+        self.processing_group = QgsCollapsibleGroupBox("Processing")
+        self.processing_group.setCollapsed(True)
+        pform = QFormLayout(self.processing_group)
+        pform.addRow("", self.harmonize_check)
+        form.addRow(self.processing_group)
+
         self.output_group = QgsCollapsibleGroupBox("Output")
         self.output_group.setCollapsed(False)
         oform = QFormLayout(self.output_group)
@@ -357,15 +374,20 @@ class BasemapTileDialog(QDialog):
         name = self._current_source_name()
         # WMS and local rasters (GeoTIFF) use tile-size + resolution; the group is
         # hidden for the zoom sources and greyed out for GeoTIFF (native res).
-        is_grid = name in ("WMS", "GeoTIFF")
+        # WMS/ArcGIS and local rasters (GeoTIFF) use tile-size + resolution; the
+        # group is hidden for the zoom sources and greyed out for GeoTIFF (native
+        # res). ArcGIS exports over a bbox at a chosen resolution, like WMS.
+        is_grid = name in ("WMS", "GeoTIFF", "ArcGIS")
         is_zoom = name in ("XYZ", "WMTS")       # both address tiles by zoom level
         self.grid_group.setVisible(is_grid)
-        self.grid_group.setEnabled(name == "WMS")
+        self.grid_group.setEnabled(name in ("WMS", "ArcGIS"))
         # GeoTIFF uses its native resolution, so fold the group away (and grey it).
         self.grid_group.setCollapsed(name == "GeoTIFF")
         # The Advanced options are all about network downloading, which a local
         # raster doesn't do (it's a windowed read), so grey them out for GeoTIFF.
         self.advanced_group.setEnabled(name != "GeoTIFF")
+        # Processing (harmonise flight years) is ArcGIS-only.
+        self.processing_group.setVisible(name == "ArcGIS")
         self._set_row_visible(self.zoom_lbl, self.zoom_spin, is_zoom)
         # Show the note for both zoom sources: XYZ gets a Web-Mercator m/px
         # figure, WMTS a "tile-matrix index" note (its resolution is set by the
@@ -553,6 +575,8 @@ class BasemapTileDialog(QDialog):
         self.giveup_spin.setValue(int(s.value(f"{g}/giveup_after", DEFAULT_GIVEUP_AFTER)))
         self.cache_bust_check.setChecked(
             s.value(f"{g}/cache_bust", DEFAULT_CACHE_BUST, type=bool))
+        self.harmonize_check.setChecked(
+            s.value(f"{g}/harmonize", DEFAULT_HARMONIZE, type=bool))
 
         # Restore the last-used extent (overriding the default canvas extent that
         # setMapCanvas seeded). setOutputExtentFromUser fills the N/S/E/W fields.
@@ -588,6 +612,7 @@ class BasemapTileDialog(QDialog):
         s.setValue(f"{g}/backoff_cap", self.backoff_cap_spin.value())
         s.setValue(f"{g}/giveup_after", self.giveup_spin.value())
         s.setValue(f"{g}/cache_bust", self.cache_bust_check.isChecked())
+        s.setValue(f"{g}/harmonize", self.harmonize_check.isChecked())
         ly = self.layer_combo.currentLayer()
         s.setValue(f"{g}/layer_id", ly.id() if ly else "")
 
@@ -688,9 +713,11 @@ class BasemapTileDialog(QDialog):
     def values(self):
         layer = self.layer_combo.currentLayer()
         name  = self._current_source_name()
-        if name in ("WMS", "GeoTIFF"):
+        if name in ("WMS", "GeoTIFF", "ArcGIS"):
             opts = {"tile_pixels": self.tile_spin.value(),
                     "resolution":  self.res_spin.value()}
+            if name == "ArcGIS":
+                opts["harmonize"] = self.harmonize_check.isChecked()
         elif name in ("XYZ", "WMTS"):
             opts = {"zoom": self.zoom_spin.value()}
         else:

@@ -38,6 +38,12 @@ and may also define (optional):
     mosaic_hints(params, opts) -> dict       # {"add_alpha": bool, "nodata": value} —
                                              # single-band data keeps nodata instead
                                              # of gaining an alpha band
+    compose_mosaic(done, work_dir, output_path, native_crs, out_crs, resample,
+                   cutline, params, opts, logger) -> tif_path
+                                             # take over the mosaic step (e.g. ArcGIS
+                                             # flight-year harmonisation). `done` is
+                                             # [(tile_spec, path), …]. Called instead
+                                             # of build_mosaic when opts["harmonize"].
 """
 
 import os, re, json, sqlite3, logging, time, traceback, hashlib, uuid, configparser
@@ -143,8 +149,8 @@ class TileFetchError(Exception):
 # SOURCE DISPATCH  (late import to avoid a cycle)
 # ─────────────────────────────────────────────
 def _source_modules():
-    from .sources import wms, xyz, wmts, gdal_raster
-    return (xyz, wmts, wms, gdal_raster)
+    from .sources import wms, xyz, wmts, gdal_raster, arcgis
+    return (xyz, wmts, wms, arcgis, gdal_raster)
 
 
 def source_for(layer):
@@ -499,6 +505,18 @@ class TileQueue:
             ap = self._resolve(p)
             if ap and os.path.exists(ap):
                 out.append(ap)
+        return out
+
+    def done_specs_paths(self):
+        """(tile_spec, absolute_path) for every downloaded tile — lets a source's
+        compose_mosaic hook group tiles by a spec field (e.g. flight year)."""
+        out = []
+        for spec, p in self._c.execute(
+                "SELECT spec, file_path FROM tiles WHERE status='done' AND file_path IS NOT NULL"):
+            ap = self._resolve(p)
+            if ap and os.path.exists(ap):
+                try: out.append((json.loads(spec), ap))
+                except Exception: pass  # nosec B110
         return out
 
     def close(self):
@@ -1221,6 +1239,17 @@ class BasemapTileDownloadTask(QgsTask):
             self.mosaicStarted.emit()
 
             cutline = self._build_cutline(extent_geom, logger) if self._clip else None
+            # A source may take over the mosaic step entirely (e.g. ArcGIS
+            # flight-year harmonisation, which composites per-year mosaics with
+            # seam colour-matching). Otherwise the standard VRT→GeoTIFF build runs.
+            compose = getattr(self._source, "compose_mosaic", None)
+            if callable(compose) and self._opts.get("harmonize"):
+                tif_path = compose(queue.done_specs_paths(), self.work_dir,
+                                   self._output_path, self._native_crs, self._out_crs,
+                                   self._resample, cutline, self._params, self._opts, logger)
+                self.result_tif_path = tif_path
+                logger.info("=== Done. Harmonised mosaic → %s ===", tif_path)
+                return
             # A source may ask to preserve a nodata value (single-band) instead of
             # adding an alpha band (RGB); default is add-alpha, as before.
             hints = {}

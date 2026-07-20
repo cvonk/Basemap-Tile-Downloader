@@ -128,7 +128,7 @@ def _kvp_base(caps_url):
 
 def prepare(params, opts, logger):
     url = params["caps_url"]
-    logger.info("WMTS GetCapabilities → %s", url)
+    logger.info("WMTS GetCapabilities → %s", engine.redact_url(url))
     status, headers, body, err, timed_out = engine.blocking_get(url)
     if timed_out:
         raise DownloaderError("Timed out fetching WMTS capabilities.")
@@ -273,10 +273,15 @@ def fetch_one_tile(params, opts, tile, out_path, logger, attempt=0):
     # matrix/row/col identity and no server-side error cache to bust.
     mat = params["matrices"][tile["m"]]
     url = _tile_url(params, mat, tile["row"], tile["col"])
+    # URLs are logged with credential-looking query values masked (a WMTS KVP
+    # base deliberately keeps an apikey/token — see _kvp_base), so a shared
+    # download.log can't leak it.
     logger.debug("GET tile %d (m%s/%d/%d): %s",
-                 tile["id"], mat["id"], tile["row"], tile["col"], url)
+                 tile["id"], mat["id"], tile["row"], tile["col"],
+                 engine.redact_url(url))
     if tile["id"] == 0:
-        logger.info("FIRST TILE URL (paste into a browser to verify): %s", url)
+        logger.info("FIRST TILE URL (paste into a browser to verify; any "
+                    "credential masked): %s", engine.redact_url(url))
 
     status, headers, body, err, timed_out = engine.blocking_get(url)
     # Order matters: any HTTP status >= 400 ALSO sets `err`

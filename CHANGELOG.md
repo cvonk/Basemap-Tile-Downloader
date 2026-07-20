@@ -3,6 +3,46 @@
 All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.10.5] - 2026-07-19
+### Added
+- **Hover help on every dialog control.** The source-layer combo, extent
+  selector, crop option, tile size, resolution, zoom level, the estimate and
+  resolution read-outs, resampling, output CRS and output destination now all
+  carry explanatory tooltips (the Advanced and Processing options already had
+  them).
+- **WMTS tile-matrix indexes up to 30** are selectable (was capped at 22; some
+  services publish more matrices — the grid still clamps to the real count).
+
+### Fixed
+- **ArcGIS shows the tile-count estimate and the large-download confirmation.**
+  The live "≈ N tiles" estimate and the >5,000-tile Terms-of-Service prompt
+  covered WMS/XYZ/GeoTIFF but not ArcGIS, so an ArcGIS download of any size
+  started unwarned. With *Harmonise flight years* on, the estimate reads **per
+  flight year** and the confirmation threshold accounts for the extra passes.
+- **Resuming a harmonised ArcGIS job no longer re-asks the overwrite/ToS
+  prompts.** The job fingerprint was partly computed from service metadata
+  resolved at run time (the refined CRS and the per-year layer list), so the
+  dialog's resume check could never match it and treated every continuation as
+  a new job. The fingerprint is now computed from prepare-independent inputs
+  only (like WMS, whose negotiated format was already excluded). An in-progress
+  harmonised queue from 1.10.4 re-queues once after this upgrade; its tiles are
+  reused from the shared cache.
+- **Same-named outputs in different folders no longer wipe each other's
+  cache.** The per-job cache dir is now keyed by the output filename **plus a
+  short hash of its full path** (`ortho-1a2b3c4d`); a cache from an earlier
+  version is renamed automatically so interrupted jobs still resume.
+- **Cached tiles are DEFLATE-compressed.** A 1024² RGBA tile was ~4 MB
+  uncompressed, putting large jobs into tens of GB of cache; compressed tiles
+  are roughly an order of magnitude smaller. Old and new tiles mix fine in an
+  existing cache.
+- **Logged request URLs mask credentials.** Every URL written to
+  `download.log` / the Message Log (per-tile requests, the "FIRST TILE URL"
+  line, GetCapabilities) now masks API-key/token/secret-style query values, so
+  sharing a log in a bug report can't leak them.
+- **Scripting API: explicit `0` is honoured** for `engine.run()`'s tuning knobs
+  (`concurrency`, `min_delay`, `backoff_cap`); previously falsy values silently
+  fell back to the defaults (`giveup_after` already handled `0` = never).
+
 ## [1.10.4] - 2026-07-18
 ### Added
 - **ArcGIS tiles now use the shared cache.** Like XYZ/WMTS/WMS, ArcGIS `export`

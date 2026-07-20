@@ -148,6 +148,12 @@ class BasemapTileDialog(QDialog):
         self.layer_combo = QgsMapLayerComboBox()
         self.layer_combo.setFilters(QgsMapLayerProxyModel.Filter.RasterLayer)
         self.layer_combo.setAllowEmptyLayer(True)
+        self.layer_combo.setToolTip(
+            "The layer to download or export. The source type (WMS, WMTS, XYZ, "
+            "ArcGIS REST, or a local GDAL raster such as a GeoTIFF) is detected "
+            "automatically, and the dialog shows the fields that apply to it.\n"
+            "Add the layer to the project first (Layer ▸ Data Source Manager); "
+            "unrecognised raster layers are not listed.")
         self._restrict_to_sources()
         self.layer_combo.layerChanged.connect(self._on_layer_changed)
         form.addRow("Source layer (WMS/WMTS/XYZ/GeoTIFF):", self.layer_combo)
@@ -172,11 +178,22 @@ class BasemapTileDialog(QDialog):
         # can be folded away once the extent is set.
         extent_group = QgsCollapsibleGroupBox("Extent to render")
         extent_group.setCollapsed(False)
+        self.extent_widget.setToolTip(
+            "The area to download/export, like QGIS's Convert Map to Raster "
+            "dialog: pick 'Calculate from Layer' (a layer's bounding box), "
+            "'Map Canvas Extent' (the current view), or type the coordinates.\n"
+            "The extent may be in any CRS — it is reprojected to whatever the "
+            "source needs.")
         extent_layout = QVBoxLayout(extent_group)
         extent_layout.setContentsMargins(6, 6, 6, 6)
         extent_layout.addWidget(self.extent_widget)
         # "Crop to the exact extent" lives with the extent it applies to.
         self.clip_check = QCheckBox("Crop output to the exact extent")
+        self.clip_check.setToolTip(
+            "The mosaic is assembled from whole tiles, so it normally extends a "
+            "little past the requested extent.\n"
+            "On: trim the output to the exact extent rectangle.\n"
+            "Off: keep the full tile-aligned coverage.")
         extent_layout.addWidget(self.clip_check)
         form.addRow(extent_group)
 
@@ -185,12 +202,26 @@ class BasemapTileDialog(QDialog):
         # its own native resolution.
         self.tile_spin = QSpinBox(); self.tile_spin.setRange(256, 8192)
         self.tile_spin.setSingleStep(256)
+        self.tile_spin.setToolTip(
+            "Width/height (in pixels) of each request sent to the server. "
+            "Larger tiles mean fewer requests; smaller tiles are gentler on "
+            "servers that reject big renders. 1024 suits most services.")
         self.tile_spin.valueChanged.connect(self._update_estimate)
         self.res_spin = QDoubleSpinBox(); self.res_spin.setDecimals(3)
         self.res_spin.setRange(0.001, 1000.0); self.res_spin.setSingleStep(0.1)
+        self.res_spin.setToolTip(
+            "Ground size of one output pixel, in the request CRS's units "
+            "(e.g. 0.5 = 0.5 m/px for a metric CRS). Finer values add real "
+            "detail only up to what the provider actually serves.\n"
+            "Greyed out for a local raster, which is exported at its own "
+            "native resolution.")
         self.res_spin.valueChanged.connect(self._update_estimate)
         # The live bounding-box tile-count estimate lives with the size controls.
         self.estimate_lbl = QLabel("")
+        self.estimate_lbl.setToolTip(
+            "Rough tile count over the extent's bounding box at the current "
+            "settings — an upper bound, updated live. Above about "
+            f"{WARN_TILE_COUNT:,} tiles the dialog asks for confirmation.")
         self.grid_group = QgsCollapsibleGroupBox("Tile size && resolution")
         self.grid_group.setCollapsed(False)
         gform = QFormLayout(self.grid_group)
@@ -202,30 +233,63 @@ class BasemapTileDialog(QDialog):
         # XYZ-only rows ------------------------------------------------------
         self.zoom_lbl  = QLabel("Zoom level:")
         self.zoom_spin = QSpinBox(); self.zoom_spin.setRange(0, 22)
+        self.zoom_spin.setToolTip(
+            "Level of detail to download. XYZ: the {z} of the tile scheme "
+            "(each step doubles the resolution — and quadruples the tile "
+            "count); the range is clamped to what the layer advertises.\n"
+            "WMTS: the index into the service's tile-matrix set (its true "
+            "resolution is set by the service).")
         self.zoom_spin.valueChanged.connect(self._update_zoom_label)
         self.zoom_spin.valueChanged.connect(self._update_estimate)
         form.addRow(self.zoom_lbl, self.zoom_spin)
 
         self.zoom_res_lbl  = QLabel("")
         self.zoom_res_info = QLabel("")
+        self.zoom_res_info.setToolTip(
+            "The approximate ground resolution the chosen zoom gives at the "
+            "extent's latitude (Web-Mercator pixels shrink toward the poles). "
+            "Pick the coarsest zoom that still shows the detail you need.")
         form.addRow(self.zoom_res_lbl, self.zoom_res_info)
 
         # Tile-count estimate for the zoom sources (XYZ/WMTS). The grid sources'
         # estimate lives in the Tile size & resolution group, which is hidden here.
         self.zoom_est_lbl  = QLabel("")
         self.zoom_estimate_info = QLabel("")
+        self.zoom_estimate_info.setToolTip(
+            "Rough tile count over the extent's bounding box at the current "
+            "zoom — an upper bound, updated live. Above about "
+            f"{WARN_TILE_COUNT:,} tiles the dialog asks for confirmation. "
+            "(No estimate is possible for WMTS before its capabilities are "
+            "fetched.)")
         form.addRow(self.zoom_est_lbl, self.zoom_estimate_info)
 
         # Output settings (CRS, resampling, destination) in a collapsible group
         # that is open by default.
         self.crs_widget = QgsProjectionSelectionWidget()
+        self.crs_widget.setToolTip(
+            "CRS of the output GeoTIFF. Tiles are fetched in the source's own "
+            "CRS and reprojected to this one while building the mosaic. "
+            "Defaults to the source's native CRS when you pick a layer; "
+            "disabled when Reproject sampling is 'None'.")
         self.resample_combo = QComboBox()
         self.resample_combo.addItem("Bilinear", "bilinear")
         self.resample_combo.addItem("Nearest neighbour", "near")
         self.resample_combo.addItem("Cubic", "cubic")
         self.resample_combo.addItem("None (keep native CRS, no reprojection)", "none")
+        self.resample_combo.setToolTip(
+            "How pixels are resampled when reprojecting to the output CRS.\n"
+            "Bilinear: smooth, good default for imagery.\n"
+            "Nearest neighbour: keeps exact values — use for categorical data.\n"
+            "Cubic: smoothest, slightly sharper than bilinear.\n"
+            "None: skip reprojection entirely — the mosaic stays in the "
+            "source's native CRS, pixel-for-pixel.")
         self.resample_combo.currentIndexChanged.connect(self._sync_resample)
         self.out_widget = OutputDestinationWidget()
+        self.out_widget.setToolTip(
+            "Where to save the GeoTIFF. Leave empty for a temporary file. "
+            "The finished mosaic is added to the project either way.\n"
+            "Re-running with the same output file resumes an interrupted "
+            "download instead of starting over.")
         # Off by default: normally the mosaic is built only once every tile is in
         # (an interrupted run resumes on re-run). Tick this to stitch whatever
         # downloaded now, leaving the missing tiles as gaps.
@@ -263,6 +327,9 @@ class BasemapTileDialog(QDialog):
             "re-expose the seam. Try 30–50%.")
         self.harmonize_match_spin.setEnabled(False)
         self.harmonize_check.toggled.connect(self.harmonize_match_spin.setEnabled)
+        # Harmonise fetches each flight year separately, so it multiplies the
+        # tile-count estimate — keep the estimate label in sync with the toggle.
+        self.harmonize_check.toggled.connect(self._update_estimate)
         self.processing_group = QgsCollapsibleGroupBox("Processing")
         self.processing_group.setCollapsed(True)
         pform = QFormLayout(self.processing_group)
@@ -440,7 +507,12 @@ class BasemapTileDialog(QDialog):
         zmin/zmax in their source; WMTS addresses matrices by index, so fall back
         to the widest range (build_tile_grid clamps to the real matrix count)."""
         lo, hi = 0, 22
-        if name == "XYZ":
+        if name == "WMTS":
+            # WMTS "zoom" is a tile-matrix INDEX; some services publish more
+            # than 22 matrices, so allow a wider range (build_tile_grid clamps
+            # to the real matrix count).
+            hi = 30
+        elif name == "XYZ":
             layer = self.layer_combo.currentLayer()
             try:
                 p = engine.source_for(layer).extract_params(layer)   # no network
@@ -509,7 +581,8 @@ class BasemapTileDialog(QDialog):
                     bb.xMinimum(), bb.yMinimum(), bb.xMaximum(), bb.yMaximum(),
                     self.zoom_spin.value())
                 return (xmax - xmin + 1) * (ymax - ymin + 1)
-            if name in ("WMS", "GeoTIFF"):
+            if name in ("WMS", "GeoTIFF", "ArcGIS"):
+                # ArcGIS tiles the extent the same origin-anchored way as WMS.
                 params = engine.source_for(layer).extract_params(layer)   # no network
                 bb = self._extent_bbox_in(QgsCoordinateReferenceSystem(params["crs"]))
                 if bb is None:
@@ -527,9 +600,22 @@ class BasemapTileDialog(QDialog):
             return None
         return None
 
+    def _harmonising(self):
+        """True when the current run would fetch each ArcGIS flight year
+        separately — multiplying the tile count by the number of years."""
+        return (self._current_source_name() == "ArcGIS"
+                and self.harmonize_check.isChecked())
+
     def _update_estimate(self, *args):
         n = self._estimate_tiles()
-        text = "" if n is None else f"≈ {n:,} tiles (bounding-box estimate)"
+        if n is None:
+            text = ""
+        elif self._harmonising():
+            # Harmonise downloads the grid once per flight year (the year count
+            # is only known after contacting the service, so it can't be shown).
+            text = f"≈ {n:,} tiles per flight year (bounding-box estimate)"
+        else:
+            text = f"≈ {n:,} tiles (bounding-box estimate)"
         # Both labels carry the text; visibility (grid group vs zoom rows) decides
         # which one the user actually sees for the current source.
         self.estimate_lbl.setText(text)
@@ -652,8 +738,9 @@ class BasemapTileDialog(QDialog):
         """True if a re-run with the current settings would resume an existing
         job (matching cache) rather than start fresh — used to skip the
         overwrite-output prompt."""
-        v = self.values()   # (layer, extent, extent_crs, opts, out_crs, out_path, temporary, …)
-        return engine.has_resumable_cache(v[0], v[1], v[2], v[3], v[5], v[6])
+        v = self.values()
+        return engine.has_resumable_cache(v["layer"], v["extent"], v["extent_crs"],
+                                          v["opts"], v["output_path"], v["temporary"])
 
     def _multi_feature_extent_warning(self):
         """When the extent was taken from a layer (Calculate from Layer), the
@@ -697,14 +784,27 @@ class BasemapTileDialog(QDialog):
         name = self._current_source_name()
         # WMTS tile counts can't be estimated without fetching capabilities, so
         # its estimate is always None; still surface the ToS reminder there.
-        large = bool(n and n > WARN_TILE_COUNT)
+        harmonising = self._harmonising()
+        # Harmonise fetches the grid once per flight year (at least 2 when it
+        # applies), so gauge "large" on that lower bound, not the per-year count.
+        effective = n * 2 if (n and harmonising) else n
+        large = bool(effective and effective > WARN_TILE_COUNT)
         unbounded_wmts = (name == "WMTS" and n is None)
         if (large or unbounded_wmts) and not resuming:
-            count_line = (
-                f"This will download roughly {n:,} tiles, which may be slow and "
-                f"put load on the server.\n\n" if large else
-                "The tile count can't be estimated in advance for WMTS, but a fine "
-                "zoom level over a large extent can be a very large download.\n\n")
+            if large and harmonising:
+                count_line = (
+                    f"This will download roughly {n:,} tiles per flight year "
+                    "(harmonise fetches each year separately), which may be slow "
+                    "and put load on the server.\n\n")
+            elif large:
+                count_line = (
+                    f"This will download roughly {n:,} tiles, which may be slow "
+                    "and put load on the server.\n\n")
+            else:
+                count_line = (
+                    "The tile count can't be estimated in advance for WMTS, but "
+                    "a fine zoom level over a large extent can be a very large "
+                    "download.\n\n")
             reply = QMessageBox.question(
                 self, "Large download",
                 count_line +
@@ -734,6 +834,8 @@ class BasemapTileDialog(QDialog):
 
     # ── result ────────────────────────────────────────────────────────────────
     def values(self):
+        """The dialog's settings as a dict whose keys match engine.run()'s
+        keyword arguments, so the caller can simply engine.run(**values)."""
         layer = self.layer_combo.currentLayer()
         name  = self._current_source_name()
         if name in ("WMS", "GeoTIFF", "ArcGIS"):
@@ -747,21 +849,23 @@ class BasemapTileDialog(QDialog):
         else:
             opts = {}
         crs = self.crs_widget.crs()
-        out_crs = crs.authid() if crs.isValid() else None
-        temporary = self.out_widget.is_temporary()
-        out_path = self.out_widget.file_path()
-        resample = self.resample_combo.currentData()
-        clip = self.clip_check.isChecked()
-        concurrency = self.conc_spin.value()
-        max_attempts = self.attempts_spin.value()
-        min_delay = self.min_delay_spin.value()
-        backoff_cap = self.backoff_cap_spin.value()
-        giveup_after = self.giveup_spin.value()
-        partial_mosaic = self.partial_check.isChecked()
-        cache_bust = self.cache_bust_check.isChecked()
         valid = self.extent_widget.isValid()
-        extent = self.extent_widget.outputExtent() if valid else None
-        extent_crs = self.extent_widget.outputCrs().authid() if valid else None
-        return (layer, extent, extent_crs, opts, out_crs, out_path, temporary,
-                resample, clip, concurrency, max_attempts, min_delay,
-                backoff_cap, giveup_after, partial_mosaic, cache_bust)
+        return {
+            "layer":        layer,
+            "extent":       self.extent_widget.outputExtent() if valid else None,
+            "extent_crs":   (self.extent_widget.outputCrs().authid()
+                             if valid else None),
+            "opts":         opts,
+            "out_crs":      crs.authid() if crs.isValid() else None,
+            "output_path":  self.out_widget.file_path(),
+            "temporary":    self.out_widget.is_temporary(),
+            "resample":     self.resample_combo.currentData(),
+            "clip":         self.clip_check.isChecked(),
+            "concurrency":  self.conc_spin.value(),
+            "max_attempts": self.attempts_spin.value(),
+            "min_delay":    self.min_delay_spin.value(),
+            "backoff_cap":  self.backoff_cap_spin.value(),
+            "giveup_after": self.giveup_spin.value(),
+            "partial_ok":   self.partial_check.isChecked(),
+            "cache_bust":   self.cache_bust_check.isChecked(),
+        }

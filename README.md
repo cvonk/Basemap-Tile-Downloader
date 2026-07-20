@@ -17,7 +17,7 @@ the resolution you choose.
 - **Harmonises flight years (ArcGIS)** — for orthophoto services that mosaic several survey years, it can download each year and colour-match them along the seam, so the result has no year-boundary banding. Optional, off by default.
 - **Plays nice with servers** — adaptive, per-source throttling and parallel fetches: fast when it can be, gentle when it must be.
 - **Never loses work** — a resumable SQLite queue picks an interrupted run back up exactly where it left off, and the cache can be moved or backed up.
-- **Skips redundant downloads** — overlapping jobs (XYZ/WMTS/WMS) reuse tiles from a shared cache, sparing both time and your provider's quota.
+- **Skips redundant downloads** — overlapping jobs (XYZ/WMTS/WMS/ArcGIS) reuse tiles from a shared cache, sparing both time and your provider's quota.
 - **Finishes clean** — a compressed, tiled GeoTIFF with overviews, optionally reprojected and cropped to the exact extent, loaded straight into your project. Single-band rasters (e.g. a DTM) keep their nodata instead of gaining an alpha band.
 
 Requires the GDAL Python bindings (bundled with QGIS). Written for QGIS 3.40.8 and QGIS 4.2.
@@ -144,12 +144,14 @@ network download. The QGIS Task Manager labels the run *"Basemap raster export"*
 Notes:
 - The dialog is organised into collapsible groups — **Extent to render** (with
   the *Crop to the exact extent* option), **Tile size &amp; resolution**, and
-  **Output** — all open by default.
+  **Output** — all open by default. **Every control has a hover tooltip** — point
+  at a field for a fuller explanation than fits in its label.
 - A live tile-count estimate updates as you adjust the settings — with the *Tile
-  size &amp; resolution* controls for WMS, or under the *Zoom level* for XYZ. Before
-  a large download the dialog asks for confirmation (with a Terms-of-Service
-  reminder): above about 5,000 estimated tiles, or for any WMTS export, whose
-  count can't be predicted in advance.
+  size &amp; resolution* controls for WMS/ArcGIS, or under the *Zoom level* for XYZ.
+  With *Harmonise flight years* on, the estimate is **per flight year** (each
+  year is fetched separately). Before a large download the dialog asks for
+  confirmation (with a Terms-of-Service reminder): above about 5,000 estimated
+  tiles, or for any WMTS export, whose count can't be predicted in advance.
 - If the chosen **output file already exists**, the dialog asks before
   overwriting it.
 - **Reproject sampling: None** keeps the mosaic in its native CRS (no
@@ -202,7 +204,8 @@ Click **OK** to start. A live per-tile counter appears in the message bar (e.g.
 *Downloading tiles… 1,234 / 2,025 (61%) · ~3m 20s left*), overall progress shows in
 the Task Manager, and the live run log opens in the **Log Messages** panel (the
 *Basemap Tile Downloader* tab). The finished mosaic is added to the project
-automatically.
+automatically. (Request URLs are logged with any API-key/token query values
+masked, so sharing a `download.log` in a bug report can't leak a credential.)
 
 ## Q & A
 
@@ -256,7 +259,9 @@ re-run and it completes.
 
 If the *same* tiles keep failing no matter how often you re-run, open
 `download.log` (each export gets its own subfolder under `__btdcache__/`, next to
-your project, named after the output file) and read the per-tile errors: the
+your project, named after the output file plus a short hash of its full path —
+so same-named outputs in different folders keep separate caches) and read the
+per-tile errors: the
 service may simply not have data for that area. A WMS
 `ServiceException` such as *"Unable to access file … tile_33_12.shp"*, or errors
 confined to one part of the extent, usually mean the provider can't serve that
@@ -291,7 +296,10 @@ where it left off (the resumable per-job cache picks up the pending tiles).
 **Can I move, back up, or restore the download cache?**
 Yes — move the **whole `__btdcache__/` folder** (next to your project). It holds
 one subfolder per export (the SQLite queue) plus a shared `shared/` tile store
-that XYZ/WMTS/WMS jobs fetch into. Paths are stored *relative* to `__btdcache__/`,
+that XYZ/WMTS/WMS/ArcGIS jobs fetch into. Tiles are cached as
+DEFLATE-compressed GeoTIFFs to keep the cache compact; once you're happy with an
+output you can delete its subfolder (or the whole `__btdcache__/`) to reclaim
+the space — you only lose the ability to resume/re-use those tiles. Paths are stored *relative* to `__btdcache__/`,
 so you can move, copy, or restore the whole folder to another drive or machine and
 a re-run with the same settings resumes without re-downloading. Moving just a
 single job's subfolder isn't enough now that the tile images live in `shared/` —
@@ -299,15 +307,16 @@ take the whole `__btdcache__/`. (Caches from before this feature stored absolute
 paths; those still work in place, but moving them re-fetches their tiles.)
 
 **I download overlapping areas — can it reuse tiles between them?**
-Yes, for **XYZ**, **WMTS** and **WMS** sources. Their tiles have a fixed global
-identity (`{z}/{x}/{y}` for XYZ, matrix/col/row for WMTS, and — because the WMS
-grid is anchored to the CRS origin — global col/row for WMS), so a tile one area
-already fetched is reused by any overlapping area at the same settings: no repeat
-request, and no hit against the provider's quota. These shared tiles live in
-`__btdcache__/shared/<source>/`, separate from the per-job folders and keyed by
-the source so different providers or settings never mix (for WMS the key covers
-the endpoint, layers, styles, CRS, format, resolution and tile size — change any
-and it's a different set). Delete that `shared/` folder to clear it (e.g. if a
+Yes, for **XYZ**, **WMTS**, **WMS** and **ArcGIS** sources. Their tiles have a
+fixed global identity (`{z}/{x}/{y}` for XYZ, matrix/col/row for WMTS, and —
+because the grid is anchored to the CRS origin — global col/row for WMS and
+ArcGIS), so a tile one area already fetched is reused by any overlapping area at
+the same settings: no repeat request, and no hit against the provider's quota.
+These shared tiles live in `__btdcache__/shared/<source>/`, separate from the
+per-job folders and keyed by the source so different providers or settings never
+mix (for WMS the key covers the endpoint, layers, styles, CRS, format,
+resolution and tile size — change any and it's a different set; ArcGIS likewise,
+with each layer / flight year cached separately). Delete that `shared/` folder to clear it (e.g. if a
 provider refreshes its imagery). A local GeoTIFF isn't downloaded, so nothing is
 cached for it. Note WMS tiles now align to the CRS origin rather than the
 extent's corner, so overlapping WMS exports share a pixel grid; the exact-extent

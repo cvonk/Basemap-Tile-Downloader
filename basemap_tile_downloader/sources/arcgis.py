@@ -232,7 +232,10 @@ def _export_url(params, opts, tile):
 
 def fetch_one_tile(params, opts, tile, out_path, logger, attempt=0):
     url = _export_url(params, opts, tile)
-    logger.debug("export tile %d (year=%s): %s", tile["id"], tile.get("year"), url)
+    # Logged with credential-looking query values (?token=…) masked, so a shared
+    # download.log can't leak them.
+    logger.debug("export tile %d (year=%s): %s", tile["id"], tile.get("year"),
+                 engine.redact_url(url))
     status, headers, body, err, timed_out = engine.blocking_get(url)
     if timed_out:
         raise TileFetchError("Request timed out.")
@@ -262,11 +265,16 @@ def fetch_one_tile(params, opts, tile, out_path, logger, attempt=0):
 # FINGERPRINT
 # ─────────────────────────────────────────────
 def fingerprint_parts(params, opts):
-    years = _years_active(params, opts)
+    # Only prepare()-independent inputs: prepare() refines params["crs"] to the
+    # service SR and fills the per-year layer list, but the engine fingerprints
+    # BEFORE prepare() (and the dialog's resume check / engine.run fingerprint
+    # freshly-extracted params), so the parts must not depend on what prepare()
+    # resolves — same reason WMS keeps its negotiated format out. The harmonise
+    # *flag* therefore stands in for the resolved year list.
     return [params["url"], params["crs"], params.get("format", "png32"),
             opts.get("tile_pixels"), opts.get("resolution"),
-            "harmonize" if years else (params.get("sel_show") or "composite"),
-            ",".join(str(y) for y, _ in years)]
+            "harmonize" if opts.get("harmonize")
+            else (params.get("sel_show") or "composite")]
 
 
 def mosaic_hints(params, opts):

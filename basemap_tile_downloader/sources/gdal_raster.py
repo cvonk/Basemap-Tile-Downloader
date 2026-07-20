@@ -171,6 +171,9 @@ def fetch_one_tile(params, opts, tile, out_path, logger, attempt=0):
         outputBounds=[xmin, ymin, xmax, ymax],
         width=tile_pixels, height=tile_pixels,
         resampleAlg="near",
+        # Compress the cached tile (no PREDICTOR: the source may be float data,
+        # e.g. a DTM, where predictor 2 is wrong).
+        creationOptions=["COMPRESS=DEFLATE"],
     )
     nd = _preserve_nodata(params)
     if nd is None:

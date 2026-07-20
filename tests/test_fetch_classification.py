@@ -14,7 +14,7 @@ import pytest
 
 from basemap_tile_downloader import engine
 from basemap_tile_downloader.engine import TileFetchError
-from basemap_tile_downloader.sources import wms, wmts, xyz
+from basemap_tile_downloader.sources import arcgis, wms, wmts, xyz
 
 PNG = b"\x89PNG fake image bytes"
 
@@ -49,6 +49,12 @@ WMTS_PARAMS = {"caps_url": "https://wmts.example/caps.xml", "layer": "ortho",
                "matrices": [{"id": "0", "scale": 1.0, "topx": 0.0, "topy": 0.0,
                              "tsx": 100.0, "tsy": 100.0, "mw": 4, "mh": 4}]}
 WMTS_TILE = {"id": 1, "m": 0, "col": 1, "row": 1}
+
+ARCGIS_PARAMS = {"url": "https://gis.example/arcgis/rest/services/Ortho/MapServer",
+                 "crs": "EPSG:31254", "format": "png32", "sel_show": None,
+                 "years": []}
+ARCGIS_TILE = {"id": 1, "col": 0, "row": 0, "xmin": 0.0, "ymin": 0.0,
+               "xmax": 512.0, "ymax": 512.0, "year": None, "layer_id": None}
 
 
 class _Log:
@@ -89,6 +95,12 @@ def test_wms_throttle_statuses(monkeypatch, status):
 @pytest.mark.parametrize("status", [429, 403, 500, 503])
 def test_wmts_throttle_statuses(monkeypatch, status):
     e = _fetch_error(wmts, WMTS_PARAMS, WMTS_TILE, monkeypatch, status=status)
+    assert e.is_throttle
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503])
+def test_arcgis_throttle_statuses(monkeypatch, status):
+    e = _fetch_error(arcgis, ARCGIS_PARAMS, ARCGIS_TILE, monkeypatch, status=status)
     assert e.is_throttle
 
 
@@ -135,6 +147,26 @@ def test_timeout_wins_over_everything(monkeypatch):
     assert "timed out" in str(e).lower()
 
 
+def test_arcgis_404_is_an_error_not_a_gap(monkeypatch):
+    e = _fetch_error(arcgis, ARCGIS_PARAMS, ARCGIS_TILE, monkeypatch, status=404)
+    assert "HTTP 404" in str(e)
+    assert not e.is_throttle and not e.is_server_error
+
+
+def test_arcgis_json_error_body_is_server_error(monkeypatch):
+    # ArcGIS reports export failures as a JSON body even with f=image, HTTP 200.
+    body = b'{"error":{"code":500,"message":"Unable to complete operation."}}'
+    e = _fetch_error(arcgis, ARCGIS_PARAMS, ARCGIS_TILE, monkeypatch,
+                     status=200, body=body)
+    assert e.is_server_error and "Unable to complete" in str(e)
+
+
+def test_arcgis_empty_body_is_an_error(monkeypatch):
+    e = _fetch_error(arcgis, ARCGIS_PARAMS, ARCGIS_TILE, monkeypatch,
+                     status=200, body=b"")
+    assert "Empty response" in str(e)
+
+
 def test_wms_service_exception_is_server_error(monkeypatch):
     body = (b'<?xml version="1.0"?><ServiceExceptionReport>'
             b"<ServiceException>msDrawMap(): failed</ServiceException>"
@@ -147,6 +179,7 @@ def test_success_paths(monkeypatch, ok_georeference):
     assert _fetch(xyz, XYZ_PARAMS, XYZ_TILE, monkeypatch, status=200) == "out.tif"
     assert _fetch(wms, WMS_PARAMS, WMS_TILE, monkeypatch, status=200) == "out.tif"
     assert _fetch(wmts, WMTS_PARAMS, WMTS_TILE, monkeypatch, status=200) == "out.tif"
+    assert _fetch(arcgis, ARCGIS_PARAMS, ARCGIS_TILE, monkeypatch, status=200) == "out.tif"
 
 
 def test_empty_2xx_body_is_a_gap_for_xyz(monkeypatch):

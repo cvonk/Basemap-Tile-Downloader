@@ -251,6 +251,30 @@ def blocking_get(url, timeout_ms=REQUEST_TIMEOUT_MS):
     return status, headers, body, error_str, timed_out
 
 
+# Query parameters whose value looks like a credential — masked when a URL is
+# logged, so a shared download.log (or a Message Log screenshot pasted into a bug
+# report) doesn't leak an API key. Matched against the parameter NAME.
+_CREDENTIAL_PARAM_RE = re.compile(r"key|token|secret|password|signature|auth", re.I)
+
+
+def redact_url(url):
+    """`url` with the value of any credential-looking query parameter replaced by
+    'REDACTED', for logging. Best-effort: a URL without such parameters is
+    returned byte-identical, and any parsing hiccup returns it unchanged."""
+    try:
+        import urllib.parse as _up
+        parts = list(_up.urlparse(url))
+        q = _up.parse_qsl(parts[4], keep_blank_values=True)
+        red = [(k, "REDACTED" if _CREDENTIAL_PARAM_RE.search(k) else v)
+               for k, v in q]
+        if red == q:
+            return url
+        parts[4] = _up.urlencode(red)
+        return _up.urlunparse(parts)
+    except Exception:
+        return url
+
+
 def parse_retry_after(value):
     if not value:
         return None
@@ -292,8 +316,13 @@ def georeference(body, out_tif, bounds, srs):
         if ds.RasterXSize == 0 or ds.RasterCount == 0:
             return "Zero-size raster."
         ulx, uly, lrx, lry = bounds
+        # DEFLATE the cached tile: a 1024² RGBA tile is ~4 MB uncompressed, so a
+        # large job's cache (and the shared tile store) would otherwise run into
+        # tens of GB. PNG-sourced imagery deflates well; mixing with older
+        # uncompressed tiles in the same cache is fine.
         gdal.Translate(out_tif, ds, options=gdal.TranslateOptions(
-            format="GTiff", outputSRS=srs, outputBounds=[ulx, uly, lrx, lry]))
+            format="GTiff", outputSRS=srs, outputBounds=[ulx, uly, lrx, lry],
+            creationOptions=["COMPRESS=DEFLATE", "PREDICTOR=2"]))
         return None
     finally:
         ds = None
@@ -537,16 +566,51 @@ def fingerprint(source, params, opts, extent_wkt, extent_crs):
     return h.hexdigest()[:16]
 
 
+def _safe_output_base(output_path):
+    """Filesystem-safe stem of the output filename, for a readable cache-dir name."""
+    base = os.path.splitext(os.path.basename(output_path))[0]
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
+
+
 def cache_key_for(output_path, temporary, fp):
-    """Per-job cache-subdir name. Uses the sanitised output filename (so re-runs
-    to the same file resume, and a different output doesn't clobber it); falls
-    back to the job fingerprint `fp` for a temporary/unnamed output."""
+    """Per-job cache-subdir name. Uses the sanitised output filename plus a short
+    hash of its full path — the name keeps the folder recognisable, the hash keeps
+    two same-named outputs in different folders (C:\\a\\ortho.tif vs
+    D:\\b\\ortho.tif) from sharing, and wiping, each other's queue. Falls back to
+    the job fingerprint `fp` for a temporary/unnamed output."""
     if output_path and not temporary:
-        base = os.path.splitext(os.path.basename(output_path))[0]
-        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._")
+        safe = _safe_output_base(output_path)
         if safe:
-            return safe
+            h = hashlib.sha256(os.path.normcase(os.path.abspath(output_path))
+                               .encode("utf-8", "replace")).hexdigest()[:8]
+            return f"{safe}-{h}"
     return fp
+
+
+def legacy_cache_key(output_path, temporary):
+    """Pre-1.10.5 cache key for this output (basename only, no path hash), or
+    None. Kept so an in-progress job from before the hashed keys still resumes:
+    run() renames its dir to the new key, and has_resumable_cache probes it."""
+    if output_path and not temporary:
+        return _safe_output_base(output_path) or None
+    return None
+
+
+def _rename_legacy_cache_dir(old_key, new_key):
+    """One-time move of a pre-1.10.5 job cache (keyed by output basename alone)
+    to its hashed name, so an interrupted job still resumes after the upgrade.
+    A same-named dir that actually belongs to a *different* output path gets
+    moved too — harmless: its fingerprint check then wipes it, exactly as the
+    old colliding keys would have."""
+    if not old_key or old_key == new_key:
+        return
+    base = os.path.join(job_base_dir(), WORK_SUBDIR_NAME)
+    old, new = os.path.join(base, old_key), os.path.join(base, new_key)
+    if os.path.isdir(old) and not os.path.exists(new):
+        try:
+            os.rename(old, new)
+        except OSError:  # nosec B110  (e.g. locked — a fresh dir is used instead)
+            pass
 
 
 def job_base_dir():
@@ -596,7 +660,14 @@ def has_resumable_cache(layer, extent, extent_crs, opts, output_path, temporary)
         fp = fingerprint(source, params, opts or {}, extent_wkt,
                          extent_crs or QgsProject.instance().crs().authid())
         ckey = cache_key_for(output_path, temporary, fp)
-        db = os.path.join(job_base_dir(), WORK_SUBDIR_NAME, ckey, "tiles.sqlite")
+        base = os.path.join(job_base_dir(), WORK_SUBDIR_NAME)
+        db = os.path.join(base, ckey, "tiles.sqlite")
+        if not os.path.isfile(db):
+            # Not yet migrated: a job from before the hashed cache keys still
+            # lives under the plain-basename dir (run() renames it on start).
+            legacy = legacy_cache_key(output_path, temporary)
+            if legacy:
+                db = os.path.join(base, legacy, "tiles.sqlite")
         if not os.path.isfile(db):
             return False
         con = sqlite3.connect(db)
@@ -743,8 +814,8 @@ def build_mosaic(tile_paths, work_dir, logger, tif_path, native_crs, out_crs,
 # Strong references to in-flight tasks. QGIS's task manager owns the C++ task,
 # but that does NOT keep the Python wrapper alive — without a Python reference the
 # subclass (and its overridden run()/finished()) can be garbage-collected before
-# it runs, so the task silently does nothing. run() adds the task here; finished()
-# removes it.
+# it runs, so the task silently does nothing. The module-level engine.run() adds
+# the task here; the task's finished() removes it.
 _ACTIVE_TASKS = set()
 
 
@@ -922,6 +993,16 @@ class BasemapTileDownloadTask(QgsTask):
         if extent_geom.isNull() or extent_geom.isEmpty():
             raise DownloaderError("No valid extent to download.")
 
+        # Compute the job fingerprint BEFORE prepare(): prepare() refines params
+        # in place (WMS negotiates the format, ArcGIS resolves the service CRS
+        # and per-year layers), but engine.run() and the dialog's resume check
+        # (has_resumable_cache) fingerprint freshly-extracted params — the
+        # fingerprint stored in the queue must match those, or every re-run of
+        # such a source would wrongly look like a brand-new job.
+        fp = fingerprint(self._source, self._params, self._opts,
+                         self._extent_wkt, self._extent_crs)
+        logger.info("Job fingerprint: %s", fp)
+
         prepare = getattr(self._source, "prepare", None)
         if callable(prepare):
             prepare(self._params, self._opts, logger)
@@ -935,9 +1016,6 @@ class BasemapTileDownloadTask(QgsTask):
 
         tiles = self._source.build_tile_grid(
             extent_geom, self._extent_crs, self._params, self._opts, logger)
-        fp = fingerprint(self._source, self._params, self._opts,
-                         self._extent_wkt, self._extent_crs)
-        logger.info("Job fingerprint: %s", fp)
 
         db_path = os.path.join(self.work_dir, "tiles.sqlite")
         migrate_flat_cache(self.work_dir, fp, logger)   # one-time pre-1.4.18 move
@@ -1428,15 +1506,18 @@ def run(layer=None, extent=None, extent_crs=None, opts=None, out_crs=None,
     print(f"[Basemap Tile Downloader] Source : {source.SOURCE_NAME}")
     print(f"[Basemap Tile Downloader] Native : {native}   Output CRS: {out_crs}")
 
-    conc     = int(concurrency) if concurrency else getattr(source, "CONCURRENCY", CONCURRENCY)
-    attempts = int(max_attempts) if max_attempts else MAX_ATTEMPTS_PER_TILE
-    mind     = float(min_delay) if min_delay else 0.0
-    cap      = float(backoff_cap) if backoff_cap else MAX_DELAY_SEC
-    # giveup_after=0 means "never give up", so distinguish it from None (not set).
+    # None means "not set" for every tuning knob (so an explicit 0 is honoured,
+    # e.g. giveup_after=0 = never give up; the task clamps out-of-range values).
+    conc     = int(concurrency) if concurrency is not None else getattr(source, "CONCURRENCY", CONCURRENCY)
+    attempts = int(max_attempts) if max_attempts is not None else MAX_ATTEMPTS_PER_TILE
+    mind     = float(min_delay) if min_delay is not None else 0.0
+    cap      = float(backoff_cap) if backoff_cap is not None else MAX_DELAY_SEC
     giveup   = MAX_CONSECUTIVE_BACKPRESSURE if giveup_after is None else int(giveup_after)
     # Per-job cache subdir so a different output/extent doesn't wipe this job.
     fp = fingerprint(source, params, opts, extent_wkt, extent_crs)
     ckey = cache_key_for(output_path, temporary, fp)
+    # One-time: move a pre-1.10.5 cache (keyed by basename alone) to the new key.
+    _rename_legacy_cache_dir(legacy_cache_key(output_path, temporary), ckey)
     task = BasemapTileDownloadTask(source, layer, extent_wkt, extent_crs, params, opts,
                                    native, out_crs, output_path, resample, clip,
                                    conc, attempts, mind, cap, giveup,

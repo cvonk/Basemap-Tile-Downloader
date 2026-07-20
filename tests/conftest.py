@@ -36,7 +36,8 @@ def _install_qgis_stubs():
     qtnet.QNetworkRequest = _Stub
 
     class QgsTask:              # engine subclasses it at import time
-        CanCancel = 0x2
+        class Flag:             # scoped enum, as the real (Qt6-safe) code uses
+            CanCancel = 0x2
 
     for name in ("Qgis", "QgsProject", "QgsApplication", "QgsMessageLog",
                  "QgsRasterLayer", "QgsBlockingNetworkRequest", "QgsGeometry",

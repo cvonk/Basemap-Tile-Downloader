@@ -4,7 +4,7 @@ qgisMinimumVersion=3.40.8
 qgisMaximumVersion=4.99
 description=Download a WMS, WMTS, XYZ, or ArcGIS REST basemap over an extent and mosaic it into a GeoTIFF.
 about=Auto-detects whether the chosen layer is a WMS, WMTS, XYZ, or ArcGIS REST MapServer tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.10.4
+version=1.10.5
 author=Coert Vonk
 email=ing.c.j.s.vonk@gmail.com
 license=GPL-3.0-or-later
@@ -16,7 +16,18 @@ experimental=False
 deprecated=False
 category=Raster
 tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.10.4 - ArcGIS tiles now use the shared cache (like XYZ/WMTS/WMS):
+changelog=1.10.5 - Code-review fixes, plus hover help on every dialog control.
+    ArcGIS now shows the live tile-count estimate and the large-download /
+    Terms-of-Service confirmation (counted per flight year when harmonising),
+    and resuming a harmonised ArcGIS job no longer re-asks the overwrite/ToS
+    prompts (the job fingerprint no longer depends on service metadata resolved
+    at run time). Per-job caches are keyed by output name plus a short path
+    hash, so same-named outputs in different folders can't wipe each other's
+    queue (existing caches migrate automatically). Cached tiles are now
+    DEFLATE-compressed (roughly an order of magnitude smaller cache). Logged
+    request URLs mask API-key/token values, so a shared download.log can't leak
+    a credential. WMTS tile-matrix indexes up to 30 are selectable.
+    1.10.4 - ArcGIS tiles now use the shared cache (like XYZ/WMTS/WMS):
     keyed by content (endpoint/CRS/format/tile-size/resolution) plus a per-tile
     layer/col/row identity, so overlapping AOIs and re-runs that only change the
     harmonise match knob or the output file reuse tiles instead of re-downloading.

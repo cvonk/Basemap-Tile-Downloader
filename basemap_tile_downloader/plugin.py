@@ -72,9 +72,9 @@ class BasemapTileDownloaderPlugin:
         if not dlg.exec():
             return
 
-        (layer, extent, extent_crs, opts, out_crs, output_path, temporary,
-         resample, clip, concurrency, max_attempts, min_delay,
-         backoff_cap, giveup_after, partial_mosaic, cache_bust) = dlg.values()
+        # values() keys match engine.run()'s keyword arguments (see dialog).
+        values = dlg.values()
+        layer, extent = values["layer"], values["extent"]
         if layer is None or engine.source_for(layer) is None:
             self.iface.messageBar().pushWarning(
                 MENU_TITLE, "Select a recognised WMS / WMTS / XYZ or local raster (GeoTIFF) layer.")
@@ -97,13 +97,7 @@ class BasemapTileDownloaderPlugin:
             local = getattr(engine.source_for(layer), "LOCAL", False)
             self._progress_verb = "Reading" if local else "Downloading"
             self._clear_progress()          # drop any counter left from a prior run
-            task = engine.run(layer=layer, extent=extent, extent_crs=extent_crs,
-                              opts=opts, out_crs=out_crs, output_path=output_path,
-                              temporary=temporary, resample=resample, clip=clip,
-                              concurrency=concurrency, max_attempts=max_attempts,
-                              min_delay=min_delay, backoff_cap=backoff_cap,
-                              giveup_after=giveup_after, partial_ok=partial_mosaic,
-                              cache_bust=cache_bust,
+            task = engine.run(**values,
                               on_finished=self._on_run_finished,
                               on_mosaic_start=self._on_mosaic_start,
                               on_tile_progress=self._on_tile_progress)

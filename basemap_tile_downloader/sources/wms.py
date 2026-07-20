@@ -143,7 +143,7 @@ def _strip_ns(tag):
 def prepare(params, opts, logger):
     """Fetch GetCapabilities and pick the best advertised image format."""
     url = _cap_url(params["url"])
-    logger.info("GetCapabilities → %s", url)
+    logger.info("GetCapabilities → %s", engine.redact_url(url))
     status, headers, body, err, timed_out = engine.blocking_get(url)
     if timed_out:
         raise DownloaderError("Timed out fetching GetCapabilities.")
@@ -309,9 +309,12 @@ def _parse_exception(body):
 
 def fetch_one_tile(params, opts, tile, out_path, logger, attempt=0):
     url = _getmap_url(params, opts, tile, attempt)
-    logger.debug("GetMap tile %d: %s", tile["id"], url)
+    # URLs are logged with credential-looking query values masked, so a shared
+    # download.log can't leak an API key.
+    logger.debug("GetMap tile %d: %s", tile["id"], engine.redact_url(url))
     if tile["id"] == 0:
-        logger.info("FIRST TILE URL (paste into a browser to verify): %s", url)
+        logger.info("FIRST TILE URL (paste into a browser to verify; any "
+                    "credential masked): %s", engine.redact_url(url))
 
     status, headers, body, err, timed_out = engine.blocking_get(url)
     # Order matters: any HTTP status >= 400 ALSO sets `err`

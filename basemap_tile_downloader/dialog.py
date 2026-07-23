@@ -14,6 +14,7 @@ import os
 import subprocess  # nosec B404
 import textwrap
 
+from qgis.PyQt.QtCore import QTimer
 from qgis.PyQt.QtWidgets import (
     QDialog, QFormLayout, QVBoxLayout, QHBoxLayout, QDialogButtonBox,
     QSpinBox, QDoubleSpinBox, QLabel, QWidget, QLineEdit, QToolButton,
@@ -63,7 +64,10 @@ def _wrap_tip(text):
     if text.lstrip().startswith("<"):
         return text
     return "\n".join(
-        textwrap.fill(line, TOOLTIP_WIDTH, subsequent_indent="  ")
+        textwrap.fill(line, TOOLTIP_WIDTH, subsequent_indent="  ",
+                      # Never split a long token: a path or URL mangled across
+                      # two lines is far worse than one over-wide line.
+                      break_long_words=False, break_on_hyphens=False)
         if line.strip() else line
         for line in text.splitlines())
 
@@ -452,6 +456,27 @@ class BasemapTileDialog(QDialog):
                       "Changing the parameters or extent starts a fresh run.")
         note.setWordWrap(True)
         layout.addWidget(note)
+
+        # Download-cache usage + a way to reclaim the space. Measured in the
+        # background (see _start_cache_scan) because a big cache holds tens of
+        # thousands of tile files.
+        self.cache_lbl = QLabel("Download cache: measuring…")
+        self.cache_lbl.setToolTip(
+            "Disk space used by the download cache beside your project "
+            "(__btdcache__): the per-export queues that let an interrupted run "
+            "resume, plus the shared tile store that overlapping areas reuse.")
+        self.cache_btn = QPushButton("Clear cache…")
+        self.cache_btn.setToolTip(
+            "Delete the cached tiles and queues to reclaim disk space. "
+            "Finished exports are unaffected — but any interrupted download "
+            "loses its progress, and shared tiles have to be fetched again "
+            "(which counts against the provider's quota).")
+        self.cache_btn.clicked.connect(self._purge_cache)
+        cache_row = QHBoxLayout()
+        cache_row.addWidget(self.cache_lbl, 1)
+        cache_row.addWidget(self.cache_btn)
+        layout.addLayout(cache_row)
+
         layout.addWidget(buttons)
 
         self._wrap_tooltips()
@@ -459,6 +484,7 @@ class BasemapTileDialog(QDialog):
         self._on_layer_changed()
         self._update_estimate()
         self._sync_resample()
+        self._start_cache_scan()
 
     def _wrap_tooltips(self):
         """Wrap the tooltips set above to a readable column width. Runs over
@@ -468,6 +494,131 @@ class BasemapTileDialog(QDialog):
         for w in vars(self).values():
             if isinstance(w, QWidget) and w is not self._canvas and w.toolTip():
                 w.setToolTip(_wrap_tip(w.toolTip()))
+
+    # ── download cache (usage + purge) ────────────────────────────────────────
+    def _start_cache_scan(self):
+        """Measure the cache without freezing the dialog. A big cache holds tens
+        of thousands of tile files, so the walk is a generator stepped from a
+        zero-delay timer: the event loop keeps running between chunks, and the
+        label updates as the total grows. The timer is parented to the dialog, so
+        closing the dialog stops the scan."""
+        self._cache_usage = None
+        self._cache_scan = engine.iter_cache_usage(engine.cache_root())
+        timer = QTimer(self)
+        timer.setInterval(0)
+        timer.timeout.connect(self._cache_scan_step)
+        self._cache_timer = timer
+        timer.start()
+
+    def _cache_scan_step(self):
+        try:
+            usage = next(self._cache_scan)
+        except StopIteration:
+            self._cache_timer.stop()
+            return
+        except Exception:       # a cache being written to underneath us
+            self._cache_timer.stop()
+            self.cache_lbl.setText("Download cache: size unavailable")
+            return
+        self._cache_usage = usage
+        self._show_cache_usage(usage)
+        if usage.get("done"):
+            self._cache_timer.stop()
+
+    @staticmethod
+    def _cache_breakdown(usage, limit=6):
+        """Largest folders in the cache, biggest first — the useful part when the
+        total is surprising, since it names what is actually taking the space
+        (including any folder left behind by an older version or a rename)."""
+        rows = list((usage.get("jobs") or {}).items())
+        if usage.get("shared"):
+            rows.append((engine.SHARED_DIR_NAME + " (tiles reused between areas)",
+                         usage["shared"]))
+        rows.sort(key=lambda kv: -kv[1])
+        return [f"{engine.format_size(size)}  —  {name}" for name, size in rows[:limit]]
+
+    def _show_cache_usage(self, usage):
+        total = usage.get("total", 0)
+        if usage.get("done") and not total:
+            self.cache_lbl.setText("Download cache: empty")
+            self.cache_btn.setEnabled(False)
+            return
+        self.cache_btn.setEnabled(True)
+        n_jobs = len(usage.get("jobs") or {})
+        shared = usage.get("shared", 0)
+        parts = []
+        if n_jobs:
+            parts.append(f"{n_jobs} export{'s' if n_jobs != 1 else ''}")
+        if shared:
+            parts.append(f"shared tiles {engine.format_size(shared)}")
+        detail = f" ({', '.join(parts)})" if parts else ""
+        suffix = "" if usage.get("done") else " so far…"
+        self.cache_lbl.setText(
+            f"Download cache: {engine.format_size(total)}{detail}{suffix}")
+        if usage.get("done"):
+            rows = self._cache_breakdown(usage)
+            # Only the prose is wrapped; the path and the size rows are left as
+            # single lines so a path stays intact and the sizes stay aligned.
+            self.cache_lbl.setToolTip(
+                _wrap_tip("Disk space used by the download cache beside your "
+                          "project: the per-export queues that let an "
+                          "interrupted run resume, plus the shared tile store "
+                          "that overlapping areas reuse.")
+                + f"\n\n{usage.get('files', 0):,} files in\n{usage.get('root', '')}"
+                + ("\n\nLargest folders:\n  " + "\n  ".join(rows) if rows else ""))
+
+    def _purge_cache(self):
+        # Never delete a cache out from under a running job.
+        if engine.active_task() is not None:
+            QMessageBox.warning(
+                self, "Download in progress",
+                "A download is running and is writing to the cache. Cancel it in "
+                "the Task Manager before clearing the cache.")
+            return
+
+        root = engine.cache_root()
+        usage = self._cache_usage if (self._cache_usage or {}).get("done") else \
+            engine.cache_usage(root)
+        total, n_jobs = usage.get("total", 0), len(usage.get("jobs") or {})
+        if not total:
+            QMessageBox.information(self, "Cache empty",
+                                    f"There is nothing cached in:\n{root}")
+            return
+
+        shared = usage.get("shared", 0)
+        rows = self._cache_breakdown(usage)
+        breakdown = ("\n\nLargest folders:\n  " + "\n  ".join(rows)) if rows else ""
+        if QMessageBox.question(
+                self, "Clear download cache?",
+                f"Delete the whole download cache?\n\n{root}\n\n"
+                f"{engine.format_size(total)} in {usage.get('files', 0):,} files "
+                f"— {n_jobs} export queue(s) and "
+                f"{engine.format_size(shared)} of shared tiles."
+                f"{breakdown}\n\n"
+                "GeoTIFFs you have already produced are NOT affected. But any "
+                "interrupted download loses its progress and starts over, and "
+                "tiles that overlapping areas were reusing must be downloaded "
+                "again — which counts against the provider's quota.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+
+        # Stop the background scan first: it would otherwise be walking a tree
+        # that is being deleted underneath it.
+        if getattr(self, "_cache_timer", None) is not None:
+            self._cache_timer.stop()
+        freed, errors = engine.purge_cache(root)
+        if errors:
+            QMessageBox.warning(
+                self, "Cache partly cleared",
+                f"Freed {engine.format_size(freed)}, but {len(errors)} item(s) "
+                "could not be deleted — they may be open in another QGIS "
+                "instance:\n\n" + "\n".join(errors[:5]))
+        else:
+            QMessageBox.information(
+                self, "Cache cleared",
+                f"Freed {engine.format_size(freed)}.")
+        self._start_cache_scan()
 
     # ── filtering / visibility ────────────────────────────────────────────────
     def _restrict_to_sources(self):

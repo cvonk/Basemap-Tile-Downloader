@@ -621,6 +621,123 @@ def job_base_dir():
             if project.fileName() else QgsApplication.qgisSettingsDirPath())
 
 
+# ─────────────────────────────────────────────
+# CACHE ACCOUNTING  (disk usage / purge, for the dialog)
+# ─────────────────────────────────────────────
+SHARED_DIR_NAME = "shared"
+
+
+def cache_root():
+    """Absolute path of the download-cache folder for the current project."""
+    return os.path.join(job_base_dir(), WORK_SUBDIR_NAME)
+
+
+def format_size(n):
+    """Bytes as a short human string ('0 B', '812 KB', '12.4 GB')."""
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(n) < 1024.0:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} TB"
+
+
+def iter_cache_usage(root, chunk=4000):
+    """Walk the cache at `root`, yielding a usage dict every `chunk` files and
+    once more at the end with done=True:
+
+        {root, total, shared, jobs: {name: bytes}, files, done}
+
+    A generator so a caller can spread the scan over event-loop turns instead of
+    freezing the UI while a multi-gigabyte cache is measured. The SAME dict is
+    yielded each time (updated in place), which is what a progress display
+    wants; copy it if you need a snapshot. Entries that vanish or can't be read
+    mid-scan are skipped rather than raising — a cache is live data."""
+    usage = {"root": root, "total": 0, "shared": 0, "jobs": {}, "files": 0,
+             "done": False}
+    if not root or not os.path.isdir(root):
+        usage["done"] = True
+        yield usage
+        return
+
+    tops = []
+    try:
+        with os.scandir(root) as it:
+            for e in it:
+                try:
+                    if e.is_dir(follow_symlinks=False):
+                        tops.append(e.name)
+                        continue
+                    usage["total"] += e.stat(follow_symlinks=False).st_size
+                    usage["files"] += 1
+                except OSError:
+                    pass
+    except OSError:
+        usage["done"] = True
+        yield usage
+        return
+
+    since_yield = 0
+    for top in tops:
+        stack = [os.path.join(root, top)]
+        while stack:
+            try:
+                with os.scandir(stack.pop()) as it:
+                    for e in it:
+                        try:
+                            if e.is_dir(follow_symlinks=False):
+                                stack.append(e.path)
+                                continue
+                            size = e.stat(follow_symlinks=False).st_size
+                        except OSError:
+                            continue
+                        usage["total"] += size
+                        usage["files"] += 1
+                        if top == SHARED_DIR_NAME:
+                            usage["shared"] += size
+                        else:
+                            usage["jobs"][top] = usage["jobs"].get(top, 0) + size
+                        since_yield += 1
+                        if since_yield >= chunk:
+                            since_yield = 0
+                            yield usage
+            except OSError:
+                continue
+    usage["done"] = True
+    yield usage
+
+
+def cache_usage(root):
+    """iter_cache_usage() run to completion — the final usage dict."""
+    usage = None
+    for usage in iter_cache_usage(root):
+        pass
+    return usage
+
+
+def purge_cache(root):
+    """Delete the whole cache tree at `root`. Returns (bytes_freed, errors),
+    where `errors` lists paths that could not be removed (e.g. a file locked by
+    another QGIS instance) — the rest is still deleted."""
+    import shutil
+    if not root or not os.path.isdir(root):
+        return 0, []
+    before = cache_usage(root)["total"]
+    errors = []
+
+    def _failed(path, exc):
+        errors.append(f"{path}: {exc}")
+
+    try:
+        # onerror is deprecated from Python 3.12 in favour of onexc; the two
+        # differ in whether the third argument is an exc_info tuple.
+        shutil.rmtree(root, onexc=lambda fn, path, exc: _failed(path, exc))
+    except TypeError:
+        shutil.rmtree(root, onerror=lambda fn, path, info: _failed(path, info[1]))
+    after = cache_usage(root)["total"] if os.path.isdir(root) else 0
+    return max(0, before - after), errors
+
+
 # A shared tile whose fetch returned "no tile here" (404/204) is recorded with a
 # zero-byte sentinel, so an overlapping AOI doesn't re-request the known gap.
 SHARED_EMPTY_SUFFIX = ".empty"

@@ -60,6 +60,64 @@ def test_legacy_cache_key_is_the_plain_basename():
     assert engine.legacy_cache_key(None, True) is None
 
 
+# ── cache accounting (dialog's usage line + purge button) ─────────────────────
+def _make_cache(root):
+    """A cache tree shaped like a real one: two export folders plus the shared
+    tile store."""
+    for rel, size in (
+            ("job-a/tiles/tile_000001.tif", 1000),
+            ("job-a/tiles/tile_000002.tif", 2000),
+            ("job-a/tiles.sqlite", 500),
+            ("job-b/tiles/tile_000001.tif", 4000),
+            ("shared/abc123/18/1/2.tif", 8000),
+            ("shared/abc123/18/1/3.tif", 8000)):
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x" * size)
+    return 23500
+
+
+def test_cache_usage_totals_and_split(tmp_path):
+    total = _make_cache(tmp_path)
+    u = engine.cache_usage(str(tmp_path))
+    assert u["done"] and u["total"] == total and u["files"] == 6
+    assert u["shared"] == 16000
+    assert u["jobs"] == {"job-a": 3500, "job-b": 4000}
+
+
+def test_cache_usage_missing_root_is_zero(tmp_path):
+    u = engine.cache_usage(str(tmp_path / "nope"))
+    assert u["done"] and u["total"] == 0 and u["jobs"] == {}
+
+
+def test_iter_cache_usage_yields_progress_then_final(tmp_path):
+    _make_cache(tmp_path)
+    # chunk=1 forces a yield per file, so the scan can be stepped by a UI timer.
+    steps = list(engine.iter_cache_usage(str(tmp_path), chunk=1))
+    assert len(steps) > 1
+    assert steps[-1]["done"] and steps[-1]["total"] == 23500
+
+
+def test_purge_cache_frees_everything(tmp_path):
+    root = tmp_path / "__btdcache__"
+    root.mkdir()
+    total = _make_cache(root)
+    freed, errors = engine.purge_cache(str(root))
+    assert freed == total and errors == []
+    assert not root.exists()
+
+
+def test_purge_cache_on_missing_root_is_a_no_op(tmp_path):
+    assert engine.purge_cache(str(tmp_path / "nope")) == (0, [])
+
+
+def test_format_size():
+    assert engine.format_size(0) == "0 B"
+    assert engine.format_size(999) == "999 B"
+    assert engine.format_size(1536) == "1.5 KB"
+    assert engine.format_size(5 * 1024**3) == "5.0 GB"
+
+
 # ── ArcGIS fingerprint must ignore what prepare() resolves ─────────────────────
 ARCGIS_PRE = {"url": "https://gis.example/rest/services/Ortho/MapServer",
               "crs": "EPSG:31254", "format": "png32", "sel_show": None,

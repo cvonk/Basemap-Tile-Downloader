@@ -293,10 +293,25 @@ can ease it further: drop **Parallel downloads** to 1 and raise **Minimum delay*
 across days: run until it stops, then **re-run the next day** and it continues
 where it left off (the resumable per-job cache picks up the pending tiles).
 
+**How much disk is the cache using, and how do I reclaim it?**
+The bottom of the dialog shows the current total, e.g. *Download cache: 19.1 GB
+(2 exports, shared tiles 762.7 MB)*. It is measured in the background, so the
+dialog opens instantly even when the cache holds tens of thousands of tiles, and
+the figure fills in as the scan proceeds. Hover it for the full path, the file
+count, and a **largest-folders breakdown** — the quickest way to see which export
+(or leftover folder) is actually holding the space. **Clear cache…** next to it
+deletes the whole `__btdcache__` folder after a confirmation that repeats the
+size and breakdown. GeoTIFFs you have already exported are untouched; what you
+lose is the ability to resume any interrupted download, and the shared tiles that
+overlapping areas were reusing (so re-downloading them counts against the
+provider's quota again). It refuses to run while a download is in progress, and
+if a file is locked by another QGIS instance it deletes the rest and tells you
+what it skipped.
+
 **Can I move, back up, or restore the download cache?**
 Yes — move the **whole `__btdcache__/` folder** (next to your project). It holds
 one subfolder per export (the SQLite queue) plus a shared `shared/` tile store
-that XYZ/WMTS/WMS/ArcGIS jobs fetch into. Tiles are cached as
+that XYZ/WMTS/WMS/WCS/ArcGIS jobs fetch into. Tiles are cached as
 DEFLATE-compressed GeoTIFFs to keep the cache compact; once you're happy with an
 output you can delete its subfolder (or the whole `__btdcache__/`) to reclaim
 the space — you only lose the ability to resume/re-use those tiles. Paths are stored *relative* to `__btdcache__/`,

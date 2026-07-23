@@ -218,3 +218,9 @@ __marimo__/
 .streamlit/secrets.toml
 
 *.zip
+
+# Claude Code
+#   settings.json is shared project configuration and IS tracked.
+#   settings.local.json is per-machine: absolute paths, session ids and temp
+#   directories that churn every session and mean nothing on another machine.
+.claude/settings.local.json

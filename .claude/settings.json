@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m ruff check basemap_tile_downloader)",
+      "Bash(python -m py_compile basemap_tile_downloader/*.py basemap_tile_downloader/sources/*.py)",
+      "Bash(python .github/scripts/validate_metadata.py)",
+      "Bash(python -m flake8 --max-line-length=100 basemap_tile_downloader tests)"
+    ]
+  }
+}

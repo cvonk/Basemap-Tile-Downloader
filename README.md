@@ -4,20 +4,21 @@
 
 **Turn any online basemap into a georeferenced GeoTIFF of exactly the area you need.**
 
-Point it at a **WMS**, **WMTS**, or **XYZ** service — or a **local raster** already
-loaded in your project — draw an extent, and the plugin fetches, georeferences, and
+Point it at a **WMS**, **WMTS**, **WCS**, or **XYZ** service — or a **local raster**
+already loaded in your project — draw an extent, and the plugin fetches, georeferences, and
 mosaics the tiles into a single compressed, overview-tiled GeoTIFF, ready for your
 map, your analysis, or your 3-D scene. Pull a 0.5 m orthophoto over one valley, or
 clip a national 10 m DTM to your study area — you get just the pixels you want, at
 the resolution you choose.
 
 ### What it does
-- **Auto-detects the source** — WMS, WMTS, XYZ, ArcGIS REST MapServer, or a local GDAL raster; no need to tell it which.
-- **Tiles your extent** — WMS `GetMap` / ArcGIS `export` at a chosen resolution, or XYZ/WMTS at a chosen zoom.
+- **Auto-detects the source** — WMS, WMTS, WCS, XYZ, ArcGIS REST MapServer, or a local GDAL raster; no need to tell it which.
+- **Tiles your extent** — WMS `GetMap` / WCS `GetCoverage` / ArcGIS `export` at a chosen resolution, or XYZ/WMTS at a chosen zoom.
+- **Downloads elevation data properly (WCS)** — a coverage service serves measured values, not pictures, so WCS requests are lossless, keep their native Float32 samples, and preserve the coverage's nodata. The published footprint is read up front, so tiles off the edge of the data are never requested.
 - **Harmonises flight years (ArcGIS)** — for orthophoto services that mosaic several survey years, it can download each year and colour-match them along the seam, so the result has no year-boundary banding. Optional, off by default.
 - **Plays nice with servers** — adaptive, per-source throttling and parallel fetches: fast when it can be, gentle when it must be.
 - **Never loses work** — a resumable SQLite queue picks an interrupted run back up exactly where it left off, and the cache can be moved or backed up.
-- **Skips redundant downloads** — overlapping jobs (XYZ/WMTS/WMS/ArcGIS) reuse tiles from a shared cache, sparing both time and your provider's quota.
+- **Skips redundant downloads** — overlapping jobs (XYZ/WMTS/WMS/WCS/ArcGIS) reuse tiles from a shared cache, sparing both time and your provider's quota.
 - **Finishes clean** — a compressed, tiled GeoTIFF with overviews, optionally reprojected and cropped to the exact extent, loaded straight into your project. Single-band rasters (e.g. a DTM) keep their nodata instead of gaining an alpha band.
 
 Requires the GDAL Python bindings (bundled with QGIS). Written for QGIS 3.40.8 and QGIS 4.2.
@@ -56,7 +57,9 @@ The tool then appears under **Raster ▸ Basemap Tile Downloader…** and on the
 ### 1. Match the coordinate reference system
 
 Set the project CRS to suit your source by clicking the EPSG code in the
-bottom-right of the window. WMS is requested in that CRS; XYZ/WMTS tiles are
+bottom-right of the window. WMS and WCS are requested in that CRS (for WCS,
+falling back to the coverage's native CRS if the service doesn't offer yours);
+XYZ/WMTS tiles are
 fetched in their native CRS (EPSG:3857 for XYZ) and reprojected to the output
 CRS you pick in the dialog — or left in the native CRS if you choose **None**
 for the resampling. (For example, **EPSG:32632** for an Italian UTM-32 source.)
@@ -76,6 +79,14 @@ service's `GetCapabilities` URL and add a WMTS layer / tile matrix set.
 
 **XYZ** — **Layer ▸ Data Source Manager ▸ XYZ ▸ New**, give it a name and a
 `{z}/{x}/{y}` URL template.
+
+**WCS** — **Layer ▸ Data Source Manager ▸ WCS ▸ New**, give it the service URL
+(for GeoServer, the `…/ows` or `…/wcs` endpoint), connect, and add a coverage.
+WCS serves *data* rather than a rendered picture, so this is the right source for
+elevation: a DTM comes back as Float32 metres with its nodata intact, not as a
+grey image. The plugin requests **WCS 1.0.0** `GetCoverage`, whose bbox-plus-size
+request maps directly onto the tile grid; services that also offer 1.1/2.0 still
+answer 1.0.0.
 
 **Local raster (GeoTIFF)** — just load the file in QGIS
 (**Layer ▸ Add Layer ▸ Add Raster Layer…**). Any GDAL-readable raster works;
@@ -124,6 +135,25 @@ dialog — set it from the dropdown:
 
 (A **WMTS** layer uses the same fields as XYZ — pick a **zoom level**.)
 
+**WCS example** (elevation)
+
+| Setting | Example |
+| --- | --- |
+| Source layer | `DTM Italy Bolzano WCS (2.5m)` |
+| Extent to render | Calculate from Layer ▸ your AOI |
+| Tile size | `1024` |
+| Resolution | `2.5` (pre-filled from the coverage's native pixel size) |
+| Output CRS | `EPSG:25832` |
+| Reproject sampling | `None` (keep the measured values unresampled) |
+| Crop output to the exact extent | ☑ |
+| Parallel downloads (Advanced) | `2` |
+| Output | `C:\Users\you\dtm_aoi.tif` |
+
+A coverage tile is raw Float32, so it is far heavier per pixel than an image
+tile — 1024² is ~4 MB on the wire. Drop the tile size (512) or coarsen the
+resolution if a server is slow to answer. Asking for a resolution finer than the
+coverage's native one only makes the server interpolate.
+
 **Local raster (GeoTIFF) example**
 
 | Setting | Example |
@@ -147,7 +177,7 @@ Notes:
   **Output** — all open by default. **Every control has a hover tooltip** — point
   at a field for a fuller explanation than fits in its label.
 - A live tile-count estimate updates as you adjust the settings — with the *Tile
-  size &amp; resolution* controls for WMS/ArcGIS, or under the *Zoom level* for XYZ.
+  size &amp; resolution* controls for WMS/WCS/ArcGIS, or under the *Zoom level* for XYZ.
   With *Harmonise flight years* on, the estimate is **per flight year** (each
   year is fetched separately). Before a large download the dialog asks for
   confirmation (with a Terms-of-Service reminder): above about 5,000 estimated
@@ -161,7 +191,7 @@ Notes:
 - The collapsible **Advanced** section holds the tuning knobs (**Reset to
   defaults** restores them; the whole section is greyed out for a local raster):
   - **Parallel downloads** — lower it (1–2) for strict servers that reject many
-    simultaneous connections; WMS defaults to 2, XYZ/WMTS to 4.
+    simultaneous connections; WMS and WCS default to 2, XYZ/WMTS to 4.
   - **Maximum attempts per tile** — how many times a tile is retried before it is
     marked failed.
   - **Minimum delay between requests** (default 0 s) — a floor on the pace; raise
@@ -180,7 +210,7 @@ Notes:
     request never recovers. Tick this to make each retry add a throwaway
     parameter so the request differs and the server actually re-renders. Leave it
     off for normal use — it forgoes the cache on retries (more load), and only
-    WMS is affected (XYZ/WMTS/local rasters ignore it).
+    WMS and WCS are affected (XYZ/WMTS/local rasters ignore it).
 - The collapsible **Processing** section (ArcGIS sources only, **closed by
   default**) holds **Harmonise flight years**. An ArcGIS orthophoto service often
   serves a mosaic of several survey years, with a visible colour seam where two
@@ -220,8 +250,9 @@ target CRS) — or, if its assigned CRS is simply wrong, fix it under the layer'
 **Does the extent (AOI) layer need the same CRS as the source layer?**
 No. The extent is reprojected automatically: **Calculate from Layer** transforms
 the AOI layer's bounding box into the project CRS, and the plugin then reprojects
-that to whatever the source needs (EPSG:3857 for XYZ, the request CRS for WMS,
-the tile-matrix-set CRS for WMTS, or the raster's CRS for a local GeoTIFF). So
+that to whatever the source needs (EPSG:3857 for XYZ, the request CRS for WMS
+and WCS, the tile-matrix-set CRS for WMTS, or the raster's CRS for a local
+GeoTIFF). So
 the AOI, the project, and the source can all be in different CRSs. The only real
 requirement is that each layer's **assigned CRS is correct** — a *mislabelled*
 AOI CRS is what produces a wrong or `NaN`/0 extent (see the previous entry).
@@ -322,15 +353,17 @@ take the whole `__btdcache__/`. (Caches from before this feature stored absolute
 paths; those still work in place, but moving them re-fetches their tiles.)
 
 **I download overlapping areas — can it reuse tiles between them?**
-Yes, for **XYZ**, **WMTS**, **WMS** and **ArcGIS** sources. Their tiles have a
-fixed global identity (`{z}/{x}/{y}` for XYZ, matrix/col/row for WMTS, and —
-because the grid is anchored to the CRS origin — global col/row for WMS and
-ArcGIS), so a tile one area already fetched is reused by any overlapping area at
+Yes, for **XYZ**, **WMTS**, **WMS**, **WCS** and **ArcGIS** sources. Their tiles
+have a fixed global identity (`{z}/{x}/{y}` for XYZ, matrix/col/row for WMTS,
+and — because the grid is anchored to the CRS origin — global col/row for WMS,
+WCS and ArcGIS), so a tile one area already fetched is reused by any overlapping
+area at
 the same settings: no repeat request, and no hit against the provider's quota.
 These shared tiles live in `__btdcache__/shared/<source>/`, separate from the
 per-job folders and keyed by the source so different providers or settings never
 mix (for WMS the key covers the endpoint, layers, styles, CRS, format,
-resolution and tile size — change any and it's a different set; ArcGIS likewise,
+resolution and tile size — change any and it's a different set; for WCS the
+endpoint, coverage, CRS, format, resolution and tile size; ArcGIS likewise,
 with each layer / flight year cached separately). Delete that `shared/` folder to clear it (e.g. if a
 provider refreshes its imagery). A local GeoTIFF isn't downloaded, so nothing is
 cached for it. Note WMS tiles now align to the CRS origin rather than the

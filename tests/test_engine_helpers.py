@@ -135,3 +135,89 @@ def test_arcgis_fingerprint_still_distinguishes_harmonise():
     base = {"tile_pixels": 1024, "resolution": 0.5}
     assert (arcgis.fingerprint_parts(ARCGIS_PRE, dict(base, harmonize=True))
             != arcgis.fingerprint_parts(ARCGIS_PRE, dict(base, harmonize=False)))
+
+
+# ── data-coverage report on a finished single-band mosaic ─────────────────────
+class _CapturingLog:
+    """Records (level, formatted message) so a test can assert on both."""
+    def __init__(self):
+        self.lines = []
+
+    def _rec(self, level):
+        def emit(msg, *args):
+            self.lines.append((level, msg % args if args else msg))
+        return emit
+
+    def __getattr__(self, level):
+        return self._rec(level)
+
+
+class _FakeBand:
+    """Minimal GDAL band: `valid_pct` None means ComputeStatistics raises, which
+    is what GDAL does when a band holds no valid pixel at all."""
+    def __init__(self, valid_pct):
+        self._pct = valid_pct
+        self.exact_requested = None
+
+    def ComputeStatistics(self, approx_ok):
+        self.exact_requested = approx_ok
+        if self._pct is None:
+            raise RuntimeError("Failed to compute statistics, no valid pixels found")
+
+    def GetMetadataItem(self, key):
+        assert key == "STATISTICS_VALID_PERCENT"
+        return str(self._pct)
+
+
+class _FakeDataset:
+    def __init__(self, valid_pct):
+        self.band = _FakeBand(valid_pct)
+
+    def GetRasterBand(self, n):
+        assert n == 1
+        return self.band
+
+
+def test_data_coverage_is_computed_exactly_not_from_overviews():
+    # AVERAGE overviews mark a cell valid when ANY contributing pixel is, so the
+    # approximate figure runs far too high on exactly the sparse rasters this is
+    # meant to catch. approx_ok must be False.
+    ds = _FakeDataset(93.0)
+    engine.report_data_coverage(ds, _CapturingLog())
+    assert ds.band.exact_requested is False
+
+
+def test_healthy_coverage_is_logged_not_warned():
+    log = _CapturingLog()
+    assert engine.report_data_coverage(_FakeDataset(93.0), log) == 93.0
+    assert [lvl for lvl, _ in log.lines] == ["info"]
+
+
+def test_sparse_coverage_warns():
+    log = _CapturingLog()
+    assert engine.report_data_coverage(_FakeDataset(13.37), log) == 13.37
+    (level, msg), = log.lines
+    assert level == "warning" and "13.4%" in msg
+
+
+def test_empty_mosaic_warns_and_reports_zero():
+    log = _CapturingLog()
+    assert engine.report_data_coverage(_FakeDataset(None), log) == 0.0
+    (level, msg), = log.lines
+    assert level == "warning" and "NO data" in msg
+
+
+def test_threshold_boundary_is_not_a_warning():
+    log = _CapturingLog()
+    engine.report_data_coverage(_FakeDataset(engine.DATA_COVERAGE_WARN_PCT), log)
+    assert [lvl for lvl, _ in log.lines] == ["info"]
+
+
+def test_a_broken_dataset_never_disturbs_the_run():
+    class _Exploding:
+        def GetRasterBand(self, n):
+            raise RuntimeError("dataset closed")
+
+    log = _CapturingLog()
+    assert engine.report_data_coverage(_Exploding(), log) is None
+    assert log.lines == []

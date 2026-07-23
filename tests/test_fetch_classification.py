@@ -14,7 +14,7 @@ import pytest
 
 from basemap_tile_downloader import engine
 from basemap_tile_downloader.engine import TileFetchError
-from basemap_tile_downloader.sources import arcgis, wms, wmts, xyz
+from basemap_tile_downloader.sources import arcgis, wcs, wms, wmts, xyz
 
 PNG = b"\x89PNG fake image bytes"
 
@@ -55,6 +55,13 @@ ARCGIS_PARAMS = {"url": "https://gis.example/arcgis/rest/services/Ortho/MapServe
                  "years": []}
 ARCGIS_TILE = {"id": 1, "col": 0, "row": 0, "xmin": 0.0, "ymin": 0.0,
                "xmax": 512.0, "ymax": 512.0, "year": None, "layer_id": None}
+
+WCS_PARAMS = {"url": "https://wcs.example/geoserver/ows", "coverage": "dtm:2.5m",
+              "crs": "EPSG:25832", "format": "GeoTIFF", "bands": 1,
+              "nodata": -9999.0, "native_res": 2.5,
+              "src_bounds": (0.0, 0.0, 10000.0, 10000.0)}
+WCS_TILE = {"id": 1, "col": 0, "row": 0,
+            "xmin": 0.0, "ymin": 0.0, "xmax": 512.0, "ymax": 512.0}
 
 
 class _Log:
@@ -209,3 +216,68 @@ def test_wmts_kvp_tile_url_appends_with_ampersand():
     url = wmts._tile_url(params, WMTS_PARAMS["matrices"][0], 1, 2)
     assert url.startswith("https://wmts.example/service?apikey=SECRET&")
     assert "TILEROW=1" in url and "TILECOL=2" in url
+
+
+# ── WCS: same classification contract as WMS, plus its own "off the edge" gap ──
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_wcs_throttle_statuses(monkeypatch, status):
+    e = _fetch_error(wcs, WCS_PARAMS, WCS_TILE, monkeypatch, status=status)
+    assert e.is_throttle
+
+
+def test_wcs_404_is_an_error_not_a_gap(monkeypatch):
+    e = _fetch_error(wcs, WCS_PARAMS, WCS_TILE, monkeypatch, status=404)
+    assert "HTTP 404" in str(e)
+    assert not e.is_throttle and not e.is_server_error
+
+
+def test_wcs_empty_2xx_body_is_an_error(monkeypatch):
+    e = _fetch_error(wcs, WCS_PARAMS, WCS_TILE, monkeypatch, status=200, body=b"")
+    assert "Empty response" in str(e)
+
+
+def test_wcs_service_exception_is_a_server_error(monkeypatch):
+    # A ServiceException arrives as HTTP 200 with an XML body; it is usually the
+    # service momentarily failing to render, so it must reach the back-pressure
+    # budget rather than burning the tile's error budget.
+    body = (b'<?xml version="1.0"?><ServiceExceptionReport>'
+            b'<ServiceException code="NoApplicableCode">Failed to read the '
+            b'coverage store</ServiceException></ServiceExceptionReport>')
+    e = _fetch_error(wcs, WCS_PARAMS, WCS_TILE, monkeypatch, status=200, body=body)
+    assert e.is_server_error and not e.is_throttle
+    assert "Failed to read the coverage store" in str(e)
+
+
+@pytest.mark.parametrize("phrase", [
+    b"The requested bounding box does not intersect the coverage",
+    b"Requested envelope does not overlap the coverage envelope",
+    b"No data available for the requested area",
+])
+def test_wcs_off_coverage_exception_is_a_gap(monkeypatch, phrase):
+    # A boundary tile the service has no data for is a legitimate gap: recording
+    # it as empty stops the engine retrying a request that can never succeed.
+    body = (b'<?xml version="1.0"?><ServiceExceptionReport><ServiceException>'
+            + phrase + b'</ServiceException></ServiceExceptionReport>')
+    assert _fetch(wcs, WCS_PARAMS, WCS_TILE, monkeypatch,
+                  status=200, body=body) is None
+
+
+def test_wcs_success_returns_the_tile_path(monkeypatch, ok_georeference):
+    assert _fetch(wcs, WCS_PARAMS, WCS_TILE, monkeypatch,
+                  status=200, body=b"II*\x00 fake tiff bytes") == "out.tif"
+
+
+def test_wcs_tile_bytes_are_written_without_a_byte_predictor(monkeypatch):
+    """Coverage samples are often Float32, where TIFF predictor 2 is the wrong
+    transform — the backend must override the engine's imagery default."""
+    seen = {}
+
+    def _spy(body, out_tif, bounds, srs, creation_options=None):
+        seen["opts"] = creation_options
+        return None
+
+    monkeypatch.setattr(engine, "georeference", _spy)
+    _fetch(wcs, WCS_PARAMS, WCS_TILE, monkeypatch,
+           status=200, body=b"II*\x00 fake tiff bytes")
+    assert seen["opts"] == ["COMPRESS=DEFLATE"]
+    assert not any("PREDICTOR" in o for o in seen["opts"])

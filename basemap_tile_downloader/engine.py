@@ -97,6 +97,14 @@ CONCURRENCY              = 4       # default parallel tile fetches; a source may
                                    # override via a CONCURRENCY attribute, and the
                                    # dialog lets the user set it per run
 
+# A finished single-band mosaic carrying less than this share of real data gets a
+# warning. Every tile can "succeed" and still contain nothing but nodata — a
+# coverage that stops at an administrative border, or a source file that was only
+# partially written — and nothing else in a run says so. Set low enough that an
+# irregular AOI polygon (whose bounding box is legitimately part nodata) doesn't
+# routinely trip it.
+DATA_COVERAGE_WARN_PCT = 50.0
+
 CLEANUP_TILES_AFTER_MOSAIC = False
 WORK_SUBDIR_NAME = "__btdcache__"
 LOG_TAB          = "Basemap Tile Downloader"
@@ -149,8 +157,8 @@ class TileFetchError(Exception):
 # SOURCE DISPATCH  (late import to avoid a cycle)
 # ─────────────────────────────────────────────
 def _source_modules():
-    from .sources import wms, xyz, wmts, gdal_raster, arcgis
-    return (xyz, wmts, wms, arcgis, gdal_raster)
+    from .sources import wms, xyz, wmts, wcs, gdal_raster, arcgis
+    return (xyz, wmts, wms, wcs, arcgis, gdal_raster)
 
 
 def source_for(layer):
@@ -298,11 +306,16 @@ def parse_retry_after(value):
 # ─────────────────────────────────────────────
 # GEOREFERENCE A TILE  (used by every source)
 # ─────────────────────────────────────────────
-def georeference(body, out_tif, bounds, srs):
+def georeference(body, out_tif, bounds, srs, creation_options=None):
     """
     Write raw tile bytes to a GeoTIFF stamped with `bounds`
     (ulx, uly, lrx, lry) in CRS `srs`. Returns None on success, or an error
     string. A fully-transparent tile is written like any other (not dropped).
+
+    `creation_options` overrides the GeoTIFF creation options for sources whose
+    pixels aren't 8-bit imagery — the default PREDICTOR=2 is byte-wise horizontal
+    differencing, which is the wrong transform for the float samples a coverage
+    (e.g. a DTM) returns. See sources/wcs.py.
     """
     if gdal is None:
         raise DownloaderError("GDAL bindings unavailable; cannot georeference tiles.")
@@ -322,7 +335,8 @@ def georeference(body, out_tif, bounds, srs):
         # uncompressed tiles in the same cache is fine.
         gdal.Translate(out_tif, ds, options=gdal.TranslateOptions(
             format="GTiff", outputSRS=srs, outputBounds=[ulx, uly, lrx, lry],
-            creationOptions=["COMPRESS=DEFLATE", "PREDICTOR=2"]))
+            creationOptions=(creation_options
+                             or ["COMPRESS=DEFLATE", "PREDICTOR=2"])))
         return None
     finally:
         ds = None
@@ -865,6 +879,57 @@ def migrate_flat_cache(work_dir, fp, logger):
 # ─────────────────────────────────────────────
 # MOSAIC
 # ─────────────────────────────────────────────
+def report_data_coverage(ds, logger):
+    """Log how much of a finished single-band mosaic actually carries data, and
+    warn when most of it is nodata.
+
+    Worth doing because that failure is otherwise silent: every tile downloads
+    and mosaics successfully, and the output opens fine — it is simply empty over
+    most of the extent, because the provider publishes nothing there (a coverage
+    that stops at a regional border) or because the source raster was only
+    partially written. Nothing else in the run distinguishes that from a good
+    result.
+
+    Statistics are computed EXACTLY, not from the overviews: AVERAGE-resampled
+    overviews treat a cell as valid when any contributing pixel is, so the
+    approximate figure runs wildly high on exactly the sparse rasters this is
+    meant to catch (13% real data reported as 55%). The exact pass costs one
+    sequential read of a file just written — and it is not wasted, since the
+    statistics are stored in the GeoTIFF and QGIS reuses them to stretch the
+    layer instead of recomputing on load. Best-effort: never disturbs a run.
+    """
+    try:
+        band = ds.GetRasterBand(1)
+        try:
+            band.ComputeStatistics(False)       # False = exact, full resolution
+            raw = band.GetMetadataItem("STATISTICS_VALID_PERCENT")
+            pct = float(raw) if raw is not None else None
+        except RuntimeError:
+            # GDAL raises rather than returning zeros when a band has no valid
+            # pixel at all — the most extreme version of what we are looking for.
+            pct = 0.0
+    except Exception:                            # nosec B110
+        return None
+
+    if pct is None:
+        return None
+    if pct <= 0.0:
+        logger.warning(
+            "The mosaic contains NO data at all — every pixel is nodata. The "
+            "source almost certainly publishes nothing for this extent; check "
+            "the layer's real coverage before re-running.")
+    elif pct < DATA_COVERAGE_WARN_PCT:
+        logger.warning(
+            "Only %.1f%% of the mosaic carries data; the rest is nodata. That is "
+            "expected if your extent polygon is much smaller than its bounding "
+            "box, or if it reaches past the edge of the source's coverage — but "
+            "it is also what a partially-written source raster looks like. Worth "
+            "a look at the output before you rely on it.", pct)
+    else:
+        logger.info("Data coverage: %.1f%% of the mosaic carries data.", pct)
+    return pct
+
+
 def build_mosaic(tile_paths, work_dir, logger, tif_path, native_crs, out_crs,
                  resample="bilinear", cutline=None, add_alpha=True, nodata=None):
     if gdal is None:
@@ -921,8 +986,13 @@ def build_mosaic(tile_paths, work_dir, logger, tif_path, native_crs, out_crs,
     except Exception as e:
         raise DownloaderError(f"Mosaic creation failed: {e}")
     ds.BuildOverviews("AVERAGE", [2, 4, 8, 16])
+    # Only meaningful where nodata marks "no data here". An RGB mosaic uses an
+    # alpha band instead, and its band 1 has no nodata to measure. Done while the
+    # dataset is still open, so the statistics land in the GeoTIFF itself.
+    data_pct = (report_data_coverage(ds, logger)
+                if (not add_alpha and nodata is not None) else None)
     ds = None
-    return vrt, tif
+    return vrt, tif, data_pct
 
 
 # ─────────────────────────────────────────────
@@ -1451,11 +1521,15 @@ class BasemapTileDownloadTask(QgsTask):
             get_hints = getattr(self._source, "mosaic_hints", None)
             if callable(get_hints):
                 hints = get_hints(self._params, self._opts) or {}
-            vrt_path, tif_path = build_mosaic(
+            vrt_path, tif_path, data_pct = build_mosaic(
                 tile_paths, self.work_dir, logger, self._output_path,
                 self._native_crs, self._out_crs, self._resample, cutline,
                 add_alpha=hints.get("add_alpha", True), nodata=hints.get("nodata"))
             self.result_tif_path = tif_path
+            # Surfaced in the completion message: a mosaic can be complete and
+            # still be mostly nodata (see report_data_coverage).
+            if data_pct is not None and self.summary is not None:
+                self.summary["data_pct"] = data_pct
 
             if CLEANUP_TILES_AFTER_MOSAIC:
                 for p in tile_paths:

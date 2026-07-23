@@ -174,14 +174,15 @@ class BasemapTileDialog(QDialog):
         self.layer_combo.setFilters(QgsMapLayerProxyModel.Filter.RasterLayer)
         self.layer_combo.setAllowEmptyLayer(True)
         self.layer_combo.setToolTip(
-            "The layer to download or export. The source type (WMS, WMTS, XYZ, "
-            "ArcGIS REST, or a local GDAL raster such as a GeoTIFF) is detected "
-            "automatically, and the dialog shows the fields that apply to it.\n"
+            "The layer to download or export. The source type (WMS, WMTS, WCS, "
+            "XYZ, ArcGIS REST, or a local GDAL raster such as a GeoTIFF) is "
+            "detected automatically, and the dialog shows the fields that apply "
+            "to it.\n"
             "Add the layer to the project first (Layer ▸ Data Source Manager); "
             "unrecognised raster layers are not listed.")
         self._restrict_to_sources()
         self.layer_combo.layerChanged.connect(self._on_layer_changed)
-        form.addRow("Source layer (WMS/WMTS/XYZ/GeoTIFF):", self.layer_combo)
+        form.addRow("Source layer (WMS/WMTS/WCS/XYZ/GeoTIFF):", self.layer_combo)
 
         # Extent selector like QGIS's "Convert Map to Raster" dialog: a dropdown
         # (Calculate from Layer / Use Current Map Canvas Extent / …) plus the
@@ -640,15 +641,15 @@ class BasemapTileDialog(QDialog):
 
     def _on_layer_changed(self, *args):
         name = self._current_source_name()
-        # WMS and local rasters (GeoTIFF) use tile-size + resolution; the group is
-        # hidden for the zoom sources and greyed out for GeoTIFF (native res).
-        # WMS/ArcGIS and local rasters (GeoTIFF) use tile-size + resolution; the
-        # group is hidden for the zoom sources and greyed out for GeoTIFF (native
-        # res). ArcGIS exports over a bbox at a chosen resolution, like WMS.
-        is_grid = name in ("WMS", "GeoTIFF", "ArcGIS")
+        # WMS/WCS/ArcGIS and local rasters (GeoTIFF) request a bbox at a chosen
+        # resolution, so they use tile-size + resolution; the group is hidden for
+        # the zoom sources and greyed out for GeoTIFF (which is read at its own
+        # native pixel size). A WCS server resamples on request, so — unlike a
+        # local file — its resolution stays editable, just defaulted to native.
+        is_grid = name in ("WMS", "WCS", "GeoTIFF", "ArcGIS")
         is_zoom = name in ("XYZ", "WMTS")       # both address tiles by zoom level
         self.grid_group.setVisible(is_grid)
-        self.grid_group.setEnabled(name in ("WMS", "ArcGIS"))
+        self.grid_group.setEnabled(name in ("WMS", "WCS", "ArcGIS"))
         # GeoTIFF uses its native resolution, so fold the group away (and grey it).
         self.grid_group.setCollapsed(name == "GeoTIFF")
         # The Advanced options are all about network downloading, which a local
@@ -673,8 +674,10 @@ class BasemapTileDialog(QDialog):
                 params = src.extract_params(layer)
                 self.crs_widget.setCrs(
                     QgsCoordinateReferenceSystem(src.default_out_crs(params)))
-                # Default a local raster's resolution to its native pixel size.
-                if name == "GeoTIFF":
+                # Default to the source's own pixel size where it has one: a local
+                # raster is always read at native, and asking a WCS for anything
+                # finer than the coverage only makes the server interpolate.
+                if name in ("GeoTIFF", "WCS"):
                     nres = params.get("native_res")
                     if nres and self.res_spin.minimum() <= nres <= self.res_spin.maximum():
                         self.res_spin.setValue(nres)
@@ -763,8 +766,8 @@ class BasemapTileDialog(QDialog):
                     bb.xMinimum(), bb.yMinimum(), bb.xMaximum(), bb.yMaximum(),
                     self.zoom_spin.value())
                 return (xmax - xmin + 1) * (ymax - ymin + 1)
-            if name in ("WMS", "GeoTIFF", "ArcGIS"):
-                # ArcGIS tiles the extent the same origin-anchored way as WMS.
+            if name in ("WMS", "WCS", "GeoTIFF", "ArcGIS"):
+                # ArcGIS and WCS tile the extent the same origin-anchored way as WMS.
                 params = engine.source_for(layer).extract_params(layer)   # no network
                 bb = self._extent_bbox_in(QgsCoordinateReferenceSystem(params["crs"]))
                 if bb is None:
@@ -1020,7 +1023,7 @@ class BasemapTileDialog(QDialog):
         keyword arguments, so the caller can simply engine.run(**values)."""
         layer = self.layer_combo.currentLayer()
         name  = self._current_source_name()
-        if name in ("WMS", "GeoTIFF", "ArcGIS"):
+        if name in ("WMS", "WCS", "GeoTIFF", "ArcGIS"):
             opts = {"tile_pixels": self.tile_spin.value(),
                     "resolution":  self.res_spin.value()}
             if name == "ArcGIS":

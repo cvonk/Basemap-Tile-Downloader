@@ -208,6 +208,17 @@ class BasemapTileDownloaderPlugin:
                     f"({missing} missing, left as gaps). Re-run with "
                     "“Build mosaic even if some tiles are missing” off to fill them.",
                     level=Qgis.MessageLevel.Warning)
+            elif (s.get("data_pct") is not None
+                    and s["data_pct"] < engine.DATA_COVERAGE_WARN_PCT):
+                # Complete, but mostly empty: every tile arrived and the source
+                # simply has no data over most of the extent. Say so here — the
+                # user would otherwise only find out by inspecting the output.
+                bar.pushMessage(
+                    MENU_TITLE,
+                    f"Mosaic loaded — {done} tiles, but only {s['data_pct']:.0f}% "
+                    "of it carries data; the rest is nodata. Check the source's "
+                    "coverage over your extent.",
+                    level=Qgis.MessageLevel.Warning)
             else:
                 bar.pushMessage(
                     MENU_TITLE, f"Mosaic loaded — {done} tiles.", level=Qgis.MessageLevel.Success)

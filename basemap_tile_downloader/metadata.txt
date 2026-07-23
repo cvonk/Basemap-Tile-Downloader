@@ -2,9 +2,9 @@
 name=Basemap Tile Downloader
 qgisMinimumVersion=3.40.8
 qgisMaximumVersion=4.99
-description=Download a WMS, WMTS, XYZ, or ArcGIS REST basemap over an extent and mosaic it into a GeoTIFF.
-about=Auto-detects whether the chosen layer is a WMS, WMTS, XYZ, or ArcGIS REST MapServer tile source. Tiles the request over a chosen extent (WMS GetMap at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
-version=1.10.6
+description=Download a WMS, WMTS, WCS, XYZ, or ArcGIS REST basemap over an extent and mosaic it into a GeoTIFF.
+about=Auto-detects whether the chosen layer is a WMS, WMTS, WCS, XYZ, or ArcGIS REST MapServer source. Tiles the request over a chosen extent (WMS GetMap / WCS GetCoverage at a chosen resolution/CRS, or WMTS / Web-Mercator {z}/{x}/{y} at a chosen zoom), downloads with adaptive throttling and a resumable SQLite work queue, georeferences each tile, and builds a compressed, tiled GeoTIFF mosaic (with overviews) using GDAL. WCS coverages (e.g. elevation) are fetched losslessly and keep their native samples and nodata. Optionally reprojects to a chosen output CRS and crops to the exact extent. Requires the GDAL Python bindings. For personal and educational use only — respect each provider's Terms of Service and usage limits.
+version=1.11.0
 author=Coert Vonk
 email=ing.c.j.s.vonk@gmail.com
 license=GPL-3.0-or-later
@@ -15,8 +15,28 @@ icon=icon.svg
 experimental=False
 deprecated=False
 category=Raster
-tags=wms,wmts,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,aoi,web mercator
-changelog=1.10.6 - Dialog tooltips wrap to a readable column: Qt does not
+tags=wms,wmts,wcs,xyz,tiles,download,raster,mosaic,gdal,basemap,orthophoto,dtm,dem,elevation,aoi,web mercator
+changelog=1.11.0 - New WCS source backend: a QGIS WCS layer is now recognised
+    and downloaded like any other source, over WCS 1.0.0 GetCoverage (the
+    version whose bbox-plus-size request maps onto the tile grid; services
+    speaking 1.1/2.0 answer it too). DescribeCoverage is read before the run for
+    the coverage's native CRS, native pixel size and exact footprint, so tiles
+    off the edge of the published data are never requested, and the resolution
+    field is pre-filled with the coverage's own. Coverages carry measured values
+    rather than pictures, so the format negotiation is lossless, tiles keep
+    their native samples (e.g. Float32 elevation) and the mosaic preserves the
+    nodata value instead of gaining an alpha band. Origin-anchored tiles join
+    the shared cache, so overlapping areas reuse each other's.
+    Also: a finished single-band mosaic now reports how much of it actually
+    carries data, and warns when most of it is nodata — a source that publishes
+    nothing over part of your extent, or a partially-written source raster,
+    otherwise produces a complete-looking run and a mostly-empty GeoTIFF with
+    nothing to say so. The statistics are computed exactly (overview-based
+    approximations read far too high on sparse rasters) and stored in the
+    output, so QGIS reuses them when stretching the layer.
+    Plus a download-cache usage display in the dialog, with a Clear cache
+    button.
+    1.10.6 - Dialog tooltips wrap to a readable column: Qt does not
     word-wrap plain-text tooltips, so the hover help added in 1.10.5 rendered as
     single very wide lines. They are now wrapped to 40 columns, with
     continuation lines indented so the "On:"/"Off:" clauses stand out.

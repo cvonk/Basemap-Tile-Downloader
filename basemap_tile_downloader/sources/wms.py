@@ -121,6 +121,27 @@ def shared_rel_path(tile):
     return "{}/{}.tif".format(tile["col"], tile["row"])
 
 
+def _preserve_nodata(params):
+    """Nodata value to carry through for a single-band WMS response (e.g. an
+    elevation coverage served as GeoTIFF — image/geotiff over a DTM layer), or
+    None. Multi-band imagery (RGB/RGBA orthophoto) is masked with an alpha band
+    instead. The band count and nodata come from the first tile the server
+    actually returned (recorded by the engine as `_tile_bands` / `_tile_nodata`):
+    a WMS can serve either kind, and GetCapabilities doesn't reliably say which,
+    so the returned pixels decide. Absent that (annotation failed, or no tiles),
+    the default treats the response as imagery and adds alpha, as before."""
+    if params.get("_tile_bands", 3) >= 3:
+        return None
+    return params.get("_tile_nodata")
+
+
+def mosaic_hints(params, opts):
+    """Tell the shared mosaic step whether to add an alpha band (RGB imagery) or
+    preserve a nodata value (single-band coverage, e.g. a DTM)."""
+    nd = _preserve_nodata(params)
+    return {"add_alpha": nd is None, "nodata": nd}
+
+
 # ─────────────────────────────────────────────
 # GETCAPABILITIES + FORMAT NEGOTIATION  (prepare hook)
 # ─────────────────────────────────────────────

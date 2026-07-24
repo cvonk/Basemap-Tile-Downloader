@@ -281,3 +281,27 @@ def test_wcs_tile_bytes_are_written_without_a_byte_predictor(monkeypatch):
            status=200, body=b"II*\x00 fake tiff bytes")
     assert seen["opts"] == ["COMPRESS=DEFLATE"]
     assert not any("PREDICTOR" in o for o in seen["opts"])
+
+
+# ── WMS alpha-vs-nodata is decided by what the server actually returned ────────
+# A WMS layer can be RGB imagery OR a single-band elevation coverage (image/geotiff
+# over a DTM). The engine records the real band count / nodata of a returned tile
+# in params; wms.mosaic_hints turns that into the alpha-vs-nodata choice.
+def test_wms_single_band_response_preserves_nodata():
+    hints = wms.mosaic_hints({"_tile_bands": 1, "_tile_nodata": -99999.0}, {})
+    assert hints == {"add_alpha": False, "nodata": -99999.0}
+
+
+def test_wms_rgb_response_gets_an_alpha_band():
+    hints = wms.mosaic_hints({"_tile_bands": 3, "_tile_nodata": None}, {})
+    assert hints == {"add_alpha": True, "nodata": None}
+
+
+def test_wms_defaults_to_imagery_when_band_count_is_unknown():
+    # Annotation failed / no tiles seen: behave exactly as before this feature —
+    # add an alpha band, never a stray nodata.
+    assert wms.mosaic_hints({}, {}) == {"add_alpha": True, "nodata": None}
+
+
+def test_wms_rgba_response_still_gets_alpha():
+    assert wms.mosaic_hints({"_tile_bands": 4}, {})["add_alpha"] is True

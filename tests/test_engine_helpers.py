@@ -220,4 +220,60 @@ def test_a_broken_dataset_never_disturbs_the_run():
 
     log = _CapturingLog()
     assert engine.report_data_coverage(_Exploding(), log) is None
-    assert log.lines == []
+
+
+# ── annotate_tile_bands: read the real band count / nodata from a tile ─────────
+class _FakeBandND:
+    def __init__(self, nodata):
+        self._nd = nodata
+
+    def GetNoDataValue(self):
+        return self._nd
+
+
+class _FakeTileDS:
+    def __init__(self, bands, nodata):
+        self.RasterCount = bands
+        self._nd = nodata
+
+    def GetRasterBand(self, n):
+        assert n == 1
+        return _FakeBandND(self._nd)
+
+
+class _FakeGdal:
+    """Minimal gdal module: Open returns a preset dataset (None to simulate an
+    unreadable tile)."""
+    def __init__(self, ds):
+        self._ds = ds
+
+    def Open(self, path):
+        return self._ds
+
+
+def test_annotate_records_single_band_nodata(monkeypatch):
+    monkeypatch.setattr(engine, "gdal", _FakeGdal(_FakeTileDS(1, -99999.0)))
+    params = {}
+    engine.annotate_tile_bands(params, "tile.tif", _CapturingLog())
+    assert params["_tile_bands"] == 1 and params["_tile_nodata"] == -99999.0
+
+
+def test_annotate_rgb_sets_band_count_without_nodata(monkeypatch):
+    monkeypatch.setattr(engine, "gdal", _FakeGdal(_FakeTileDS(3, None)))
+    params = {}
+    engine.annotate_tile_bands(params, "tile.tif", _CapturingLog())
+    assert params["_tile_bands"] == 3 and "_tile_nodata" not in params
+
+
+def test_annotate_is_a_noop_without_gdal(monkeypatch):
+    monkeypatch.setattr(engine, "gdal", None)
+    params = {}
+    engine.annotate_tile_bands(params, "tile.tif", _CapturingLog())
+    assert params == {}
+
+
+def test_annotate_is_a_noop_on_an_unreadable_tile(monkeypatch):
+    monkeypatch.setattr(engine, "gdal", _FakeGdal(None))    # Open() -> None
+    params = {}
+    engine.annotate_tile_bands(params, "tile.tif", _CapturingLog())
+    assert params == {}

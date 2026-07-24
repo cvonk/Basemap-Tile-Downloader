@@ -930,6 +930,31 @@ def report_data_coverage(ds, logger):
     return pct
 
 
+def annotate_tile_bands(params, tile_path, logger):
+    """Record the band count and band-1 nodata of an actual downloaded tile into
+    `params`, under the private keys `_tile_bands` / `_tile_nodata`, so a source's
+    mosaic_hints can choose alpha-vs-nodata from what the server really returned
+    rather than from what it could guess up front. Best-effort: any problem leaves
+    the keys unset, and the hint falls back to its default (treat as RGB)."""
+    if gdal is None:
+        return
+    ds = None
+    try:
+        ds = gdal.Open(tile_path)
+        if ds is None:
+            return
+        params["_tile_bands"] = ds.RasterCount
+        nd = ds.GetRasterBand(1).GetNoDataValue()
+        if nd is not None:
+            params["_tile_nodata"] = nd
+        logger.debug("Tile layout: %d band(s), nodata=%s",
+                     ds.RasterCount, params.get("_tile_nodata"))
+    except Exception:  # nosec B110
+        pass
+    finally:
+        ds = None
+
+
 def build_mosaic(tile_paths, work_dir, logger, tif_path, native_crs, out_crs,
                  resample="bilinear", cutline=None, add_alpha=True, nodata=None):
     if gdal is None:
@@ -1516,7 +1541,15 @@ class BasemapTileDownloadTask(QgsTask):
                 logger.info("=== Done. Harmonised mosaic → %s ===", tif_path)
                 return
             # A source may ask to preserve a nodata value (single-band) instead of
-            # adding an alpha band (RGB); default is add-alpha, as before.
+            # adding an alpha band (RGB); default is add-alpha, as before. Some
+            # sources can't tell which they are until they see a returned tile
+            # (a WMS layer may be RGB imagery or a single-band elevation coverage
+            # served as GeoTIFF), so expose the real band count / nodata of an
+            # actual downloaded tile under private keys. Done here — from the
+            # tiles on disk — so it holds on a rebuild-only resume too, not just a
+            # fresh fetch. Private keys, set after the fingerprint and shared-cache
+            # signature are computed, so they can't affect either.
+            annotate_tile_bands(self._params, tile_paths[0], logger)
             hints = {}
             get_hints = getattr(self._source, "mosaic_hints", None)
             if callable(get_hints):
